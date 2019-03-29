@@ -9,11 +9,14 @@ import (
 
 //Configuration defines the base configuration that can be passed to the WASTE system
 type Configuration struct {
-	Debug    bool
-	Execute  bool
-	DBHost   string
-	DBUser   string
-	DBPasswd string
+	Debug      bool
+	Execute    bool
+	DBHost     string
+	DBUser     string
+	DBPasswd   string
+	MyDBHost   string
+	MyDBUser   string
+	MyDBPasswd string
 }
 
 // Config is the global configuration variable
@@ -48,7 +51,7 @@ func LoadConfiguration() *Configuration {
 	if cfg.Debug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
-
+	Config = &cfg
 	return &cfg
 }
 
