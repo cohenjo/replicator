@@ -15,6 +15,8 @@ PG also uses binary logs (WALS) to transfer replication - so that's also on the 
 Once we got an event for a record change (insert/update/delete) we transform it using [kazaam](https://github.com/qntfy/kazaam) and propogate the change to the registered endpoints.    
 We support field mapping, field filtering, and maybe transformations.
 
+Metrics on input/output records are exposed via Prometheus.
+
 
 ## Getting started
 
@@ -36,8 +38,11 @@ If the deployment has remote endpoints it might be better to use a replicated ka
  - [x] MySQL - input/output
  - [x] MongoDB - input/output
  - [x] KAFKA - input/output
- - [ ] ElasticSearch - output
- - [ ] Metrics - expose metric of input/output records
+ - [x] ElasticSearch - output
+ - [x] Metrics - expose metric of to prometheus
+ - [ ] Support of all CRUD ops
+ - [ ] Grafana Dashboard
+ - [ ] Load tool 
 
 ## Alternatives
 
@@ -54,6 +59,7 @@ If the deployment has remote endpoints it might be better to use a replicated ka
 - [ffjson](https://github.com/pquerna/ffjson)
 - [sarama](https://github.com/Shopify/sarama)
 - [elasticsearch go driver](github.com/elastic/go-elasticsearch)
+- [prometheus](https://github.com/prometheus/client_golang/)
 
 ## License
 `reflector` is licensed under MIT License. 
