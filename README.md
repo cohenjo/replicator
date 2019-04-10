@@ -2,10 +2,12 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/cohenjo/replicator)](https://goreportcard.com/report/github.com/cohenjo/replicator)
 [![GoDoc](https://godoc.org/github.com/cohenjo/replicator?status.svg)](https://godoc.org/github.com/cohenjo/replicator)
 
-## General
-Replicator is a go package aimed to test out different options to take change stream off DB engines.
-It's inspired by [canal](https://github.com/siddontang/go-mysql#canal) which provides a change stream off MySQL.
+![replicator logo](docs/replicator_long_logo.png)
 
+## General
+Replicator is a go package aimed to replicate data between data sources using change streams.
+
+It uses MySQL [replication](https://github.com/siddontang/go-mysql#replication) to read MySQL change stream like a replica.
 Mongo has [Change Streams](https://docs.mongodb.com/manual/changeStreams/#change-streams) - so this should be doable easily.  
 For Kafka I use [sarama](https://github.com/Shopify/sarama) - Kafka doesn't really have a change stream, but we use it as a bus to distribute change events cross data-centers.   
 PG also uses binary logs (WALS) to transfer replication - so that's also on the agenda.
@@ -49,12 +51,13 @@ If the deployment has remote endpoints it might be better to use a replicated ka
 ## built using
 - [go-mysql](https://github.com/siddontang/go-mysql)
 - [sqlx](https://github.com/jmoiron/sqlx)
-- [mongo driver](https://github.com/mongodb/mongo-go-driver)
+- [mongo go driver](https://github.com/mongodb/mongo-go-driver)
 - [kazaam](https://github.com/qntfy/kazaam)
 - [ffjson](https://github.com/pquerna/ffjson)
 - [sarama](https://github.com/Shopify/sarama)
+- [elasticsearch go driver](github.com/elastic/go-elasticsearch)
 
 ## License
-`reflector` is licensed under MIT License
+`reflector` is licensed under MIT License. 
 Some of the components used are Licensed under Apache License, Version 2.0
 Please review before using in comurcial environments.
