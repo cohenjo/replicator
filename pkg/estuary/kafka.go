@@ -3,14 +3,12 @@ package estuary
 import (
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/pquerna/ffjson/ffjson"
 
 	"github.com/Shopify/sarama"
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
-	"github.com/rs/zerolog"
 )
 
 /*
@@ -28,7 +26,6 @@ type KafkaEndpoint struct {
 }
 
 func (s KafkaEndpoint) WriteEvent(record *events.RecordEvent) {
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	// We are not setting a message key, which means that all messages will
 	// be distributed randomly over the different partitions.
 
@@ -94,7 +91,7 @@ func newDataCollector(brokerList []string) sarama.SyncProducer {
 
 func (s *KafkaEndpoint) Close() error {
 	if err := s.producer.Close(); err != nil {
-		log.Println("Failed to shut down data collector cleanly", err)
+		logger.Error().Err(err).Msg("Failed to shut down data collector cleanly")
 	}
 
 	return nil

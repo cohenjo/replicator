@@ -41,7 +41,7 @@ If the deployment has remote endpoints it might be better to use a replicated ka
  - [x] ElasticSearch - output
  - [x] Metrics - expose metric of to prometheus
  - [ ] Support of all CRUD ops
- - [ ] Grafana Dashboard
+ - [ ] Grafana Dashboard - extend dashboard
  - [ ] Load tool 
 
 ## Alternatives
@@ -59,7 +59,7 @@ If the deployment has remote endpoints it might be better to use a replicated ka
 - [ffjson](https://github.com/pquerna/ffjson)
 - [sarama](https://github.com/Shopify/sarama)
 - [elasticsearch go driver](github.com/elastic/go-elasticsearch)
-- [prometheus](https://github.com/prometheus/client_golang/)
+- [prometheus client](https://github.com/prometheus/client_golang/)
 
 ## License
 `reflector` is licensed under MIT License. 

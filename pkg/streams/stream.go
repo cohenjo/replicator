@@ -1,9 +1,13 @@
 package streams
 
 import (
+	"os"
+
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
-	"github.com/rs/zerolog/log"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/rs/zerolog"
 )
 
 type Stream interface {
@@ -18,7 +22,14 @@ type StreamManagment struct {
 	quit    chan bool
 }
 
-var StreamManager *StreamManagment
+var (
+	recordsRecieved = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "replicator_recieved_records_total",
+		Help: "The total number of records recieved",
+	})
+	StreamManager *StreamManagment
+	logger        = zerolog.New(os.Stderr).With().Timestamp().Logger()
+)
 
 func SetupStreamManager(events *chan *events.RecordEvent) {
 	StreamManager = &StreamManagment{
@@ -48,10 +59,10 @@ func (sm *StreamManagment) registerStreams(stream Stream) {
 func (em *StreamManagment) StartListening() {
 	for i, stream := range em.streams {
 		if stream == nil {
-			log.Error().Msgf("Missing stream: %d) ", i)
+			logger.Error().Msgf("Missing stream: %d) ", i)
 			continue
 		}
-		log.Info().Msgf("Starting stream: %d) %s", i, stream.StreamType())
+		logger.Info().Msgf("Starting stream: %d) %s", i, stream.StreamType())
 		go stream.Listen()
 	}
 }

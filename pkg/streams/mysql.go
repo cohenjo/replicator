@@ -3,7 +3,6 @@ package streams
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/pquerna/ffjson/ffjson"
@@ -15,14 +14,13 @@ import (
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/juju/errors"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/siddontang/go-mysql/mysql"
 	"github.com/siddontang/go-mysql/replication"
 )
 
 type MySQLStream struct {
 	events    *chan *events.RecordEvent
+	config    *config.WaterFlowsConfig
 	db        string
 	tableName string
 	table     *schema.Table
@@ -33,6 +31,7 @@ func NewMySQLStream(events *chan *events.RecordEvent, streamConfig *config.Water
 	stream.events = events
 	stream.db = streamConfig.Schema
 	stream.tableName = streamConfig.Collection
+	stream.config = streamConfig
 	return stream
 }
 
@@ -45,12 +44,10 @@ func (stream MySQLStream) Configure(events *chan *events.RecordEvent, schema str
 
 func (stream MySQLStream) Listen() {
 
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
-
 	streamUri := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=true",
 		config.Config.MyDBUser,
 		config.Config.MyDBPasswd,
-		config.Config.MyDBHost, 3306,
+		stream.config.Host, stream.config.Port,
 		stream.db,
 	)
 	conn, err := sqlx.Open("mysql", streamUri)
@@ -70,8 +67,8 @@ func (stream MySQLStream) Listen() {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID: 100,
 		Flavor:   "mysql",
-		Host:     config.Config.MyDBHost,
-		Port:     3306,
+		Host:     stream.config.Host,
+		Port:     uint16(stream.config.Port),
 		User:     config.Config.MyDBUser,
 		Password: config.Config.MyDBPasswd,
 	}
@@ -162,7 +159,7 @@ func (stream MySQLStream) handleRowsEvent(e *replication.BinlogEvent) error {
 
 	switch action {
 	case events.UpdateAction:
-		log.Error().Msg("don't support update yet")
+		logger.Error().Msg("don't support update yet")
 	case events.InsertAction, events.DeleteAction:
 		for _, row := range ev.Rows {
 
@@ -172,7 +169,7 @@ func (stream MySQLStream) handleRowsEvent(e *replication.BinlogEvent) error {
 			}
 			data, err := ffjson.Marshal(toJson)
 			if err != nil {
-				log.Error().Err(err).Msg("could not marshel the row")
+				logger.Error().Err(err).Msg("could not marshel the row")
 				continue
 			}
 			record := &events.RecordEvent{
@@ -183,8 +180,9 @@ func (stream MySQLStream) handleRowsEvent(e *replication.BinlogEvent) error {
 			}
 
 			if stream.events != nil {
-				log.Debug().Str("action", action).Msgf("row: %s", string(data))
+				logger.Debug().Str("action", action).Msgf("row: %s", string(data))
 				*stream.events <- record
+				recordsRecieved.Inc()
 			}
 
 		}

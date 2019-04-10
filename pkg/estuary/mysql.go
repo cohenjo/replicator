@@ -2,14 +2,12 @@ package estuary
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/jmoiron/sqlx"
 	"github.com/pquerna/ffjson/ffjson"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -23,8 +21,6 @@ type MySQLEndpoint struct {
 	deleteStmt sqlx.Stmt
 }
 
-// logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
-
 func NewMySQLEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MySQLEndpoint) {
 	endpoint.db = streamConfig.Schema
 	endpoint.tableName = streamConfig.Collection
@@ -32,12 +28,12 @@ func NewMySQLEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MySQLEndp
 	streamUri := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=true",
 		config.Config.MyDBUser,
 		config.Config.MyDBPasswd,
-		streamConfig.Host, 3306,
+		streamConfig.Host, streamConfig.Port,
 		streamConfig.Schema,
 	)
 	conn, err := sqlx.Open("mysql", streamUri)
 	if err != nil {
-		log.Error().Err(err).Msgf("Error while connecting to source MySQL db")
+		logger.Error().Err(err).Msgf("Error while connecting to source MySQL db")
 	}
 	endpoint.conn = conn
 
@@ -47,7 +43,6 @@ func NewMySQLEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MySQLEndp
 }
 
 func (std MySQLEndpoint) WriteEvent(record *events.RecordEvent) {
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 
 	row := make(map[string]interface{})
 	err := ffjson.Unmarshal(record.Data, &row)
@@ -73,7 +68,7 @@ func (std MySQLEndpoint) WriteEvent(record *events.RecordEvent) {
 
 		}
 		values.WriteString(")")
-		log.Info().Msgf("Insert stmnt: %s", values.String())
+		logger.Info().Msgf("Insert stmnt: %s", values.String())
 		_, _ = std.conn.NamedExec(values.String(), row)
 
 	case "delete":

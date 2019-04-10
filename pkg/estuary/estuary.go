@@ -11,6 +11,8 @@ import (
 
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog"
 )
 
@@ -28,8 +30,14 @@ type EndpointManagment struct {
 	quit         chan bool
 }
 
-var EndpointManager *EndpointManagment
-var logger *zerolog.Logger
+var (
+	EndpointManager *EndpointManagment
+	logger          = zerolog.New(os.Stderr).With().Timestamp().Logger()
+	recordsSent     = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "replicator_sent_records_total",
+		Help: "The total number of records sent",
+	})
+)
 
 func SetupEndpointManager(events *chan *events.RecordEvent) {
 	EndpointManager = &EndpointManagment{
@@ -37,8 +45,6 @@ func SetupEndpointManager(events *chan *events.RecordEvent) {
 		endpoints:    make([]Endpoint, 0),
 		quit:         make(chan bool),
 	}
-	l := zerolog.New(os.Stderr).With().Timestamp().Logger()
-	logger = &l
 }
 
 func (em *EndpointManagment) NewEstuary(streamConfig *config.WaterFlowsConfig) {
@@ -70,6 +76,7 @@ func (em *EndpointManagment) PublishEvents() {
 			for _, endpoint := range em.endpoints {
 				endpoint.WriteEvent(record)
 			}
+			recordsSent.Inc()
 		case <-em.quit:
 			return
 		}

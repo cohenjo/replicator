@@ -11,13 +11,20 @@ tasks:
     cmds:
       - echo "{{.GREETING}}"
     silent: false
+
+  docker-network:
+    desc: Create user network
+    cmds:
+      - cmd: docker network create replicator-net
   
   create-container:
+    deps: [docker-network]
     desc: Create local mysql container for kafka
     cmds:
       - cmd: docker ps -a | grep some-kafka || docker create --name some-kafka -p 2181:2181 -p 9092:9092 --env ADVERTISED_HOST=localhost --env ADVERTISED_PORT=9092 spotify/kafka
       - cmd: docker ps -a | grep some-elastic || docker create --name some-elastic -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" elasticsearch:6.7.0
-      - cmd: docker ps -a | grep some-prometheus || docker create --name some-prometheus -p 9090:9090 -v {{.CONF_DIR}}/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+      - cmd: docker ps -a | grep some-prometheus || docker create --name some-prometheus --network replicator-net -p 9090:9090 -v {{.CONF_DIR}}/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+      - cmd: docker ps -a | grep some-grafana || docker create --name some-grafana --network replicator-net -p 3000:3000  -e "GF_SECURITY_ADMIN_PASSWORD=secret" grafana/grafana
 
   start:
     deps: [create-container]
@@ -26,3 +33,4 @@ tasks:
       - cmd: docker ps | grep some-kafka || docker start some-kafka
       - cmd: docker ps | grep some-elastic || docker start some-elastic
       - cmd: docker ps | grep some-prometheus || docker start some-prometheus
+      - cmd: docker ps | grep some-grafana || docker start some-grafana

@@ -3,13 +3,10 @@ package estuary
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/pquerna/ffjson/ffjson"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -27,13 +24,13 @@ func NewMongoEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MongoEndp
 	uri := fmt.Sprintf("mongodb://%s:%s@%s:27017/admin", config.Config.DBUser, config.Config.DBPasswd, streamConfig.Host)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
-		log.Error().Err(err).Msg("connection failure")
+		logger.Error().Err(err).Msg("connection failure")
 	}
 
 	// Check the connection
 	err = client.Ping(context.TODO(), nil)
 	if err != nil {
-		log.Error().Err(err).Msg("connection ping failure")
+		logger.Error().Err(err).Msg("connection ping failure")
 	}
 
 	fmt.Println("Connected to MongoDB!")
@@ -47,18 +44,18 @@ func NewMongoEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MongoEndp
 }
 
 func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
+
 	row := make(map[string]interface{})
 	err := ffjson.Unmarshal(record.Data, &row)
 	if err != nil {
-		log.Error().Err(err).Msgf("Error while connecting to source MySQL db")
+		logger.Error().Err(err).Msgf("Error while connecting to source MySQL db")
 	}
 
 	switch record.Action {
 	case "insert":
 		insertResult, err := std.collection.InsertOne(context.TODO(), row)
 		if err != nil {
-			log.Error().Err(err).Msgf("Error while inserting document")
+			logger.Error().Err(err).Msgf("Error while inserting document")
 		}
 		fmt.Println("Inserted a single document: ", insertResult.InsertedID)
 	case "delete":

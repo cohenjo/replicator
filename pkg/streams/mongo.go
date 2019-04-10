@@ -7,7 +7,6 @@ import (
 
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
-	"github.com/rs/zerolog/log"
 
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -16,6 +15,7 @@ import (
 
 type MongoStream struct {
 	events     *chan *events.RecordEvent
+	config     *config.WaterFlowsConfig
 	db         string
 	collection string
 }
@@ -24,6 +24,7 @@ func NewMongoStream(events *chan *events.RecordEvent, streamConfig *config.Water
 	stream.events = events
 	stream.db = streamConfig.Schema
 	stream.collection = streamConfig.Collection
+	stream.config = streamConfig
 	return stream
 }
 
@@ -35,23 +36,25 @@ func (stream MongoStream) Listen() {
 
 	// ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
 	ctx := context.Background()
-	uri := fmt.Sprintf("mongodb://%s:%s@%s:27017/admin", config.Config.DBUser, config.Config.DBPasswd, config.Config.DBHost)
+	uri := fmt.Sprintf("mongodb://%s:%s@%s:%d/admin", config.Config.DBUser, config.Config.DBPasswd, stream.config.Host, stream.config.Port)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
-		log.Error().Err(err).Msgf("error failed to connect: %v", err)
+		logger.Error().Err(err).Msgf("error failed to connect: %v", err)
 	}
 	err = client.Ping(ctx, readpref.Primary())
 	if err != nil {
-		log.Error().Err(err).Msgf("error failed to ping: %v", err)
+		logger.Error().Err(err).Msgf("error failed to ping: %v", err)
 	}
 	collection := client.Database(stream.db).Collection(stream.collection)
 
-	cs, err := collection.Watch(ctx, mongo.Pipeline{})
+	cs, err := collection.Watch(ctx, mongo.Pipeline{}, options.ChangeStream().SetFullDocument(options.UpdateLookup))
 	if err != nil {
-		log.Error().Err(err).Msgf("error failed to watch: %v \n", err)
+		logger.Error().Err(err).Msgf("error failed to watch: %v \n", err)
 	}
 
 	// defer cs.Close(ctx)
+	// resumeToken := next.Lookup("_id").Document()
+	// cs, err := coll.Watch(ctx, mongo.Pipeline{}, options.ChangeStream().SetResumeAfter(resumeToken))
 
 	for {
 
@@ -59,22 +62,25 @@ func (stream MongoStream) Listen() {
 		if ok {
 			next := cs.Current
 			action := next.Lookup("operationType").String()
+			documentKey := []byte(next.Lookup("documentKey").String())
 			data := []byte(next.Lookup("fullDocument").String())
 
 			record := &events.RecordEvent{
 				Action:     action,
 				Schema:     stream.db,
 				Collection: stream.collection,
+				OldData:    documentKey,
 				Data:       data,
 			}
 
 			if stream.events != nil {
-				log.Debug().Str("action", action).Msgf("row: %s", string(data))
+				logger.Debug().Str("action", action).Msgf("row: %s", string(data))
 				*stream.events <- record
+				recordsRecieved.Inc()
 			}
 		} else {
 			time.Sleep(100 * time.Millisecond)
-			log.Debug().Str("action", "sleep").Msgf("got nothing: %s \n", cs.Err())
+			logger.Debug().Str("action", "sleep").Msgf("got nothing: %s \n", cs.Err())
 		}
 	}
 

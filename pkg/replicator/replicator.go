@@ -23,6 +23,7 @@ var (
 		Name: "replicator_processed_records_total",
 		Help: "The total number of records processed",
 	})
+	logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
 )
 
 /*

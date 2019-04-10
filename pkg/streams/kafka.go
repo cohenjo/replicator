@@ -3,14 +3,12 @@ package streams
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/pquerna/ffjson/ffjson"
 
 	"github.com/Shopify/sarama"
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
-	"github.com/rs/zerolog"
 )
 
 /*
@@ -39,7 +37,7 @@ func (stream KafkaStream) StreamType() string {
 }
 
 func (stream KafkaStream) Listen() {
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
+
 	// version, err := sarama.ParseKafkaVersion("2.1.1")
 	// if err != nil {
 	// 	logger.Error().Err(err).Msg("Failed to parse version")
@@ -117,7 +115,6 @@ type Consumer struct {
 
 // Setup is run at the beginning of a new session, before ConsumeClaim
 func (consumer *Consumer) Setup(sarama.ConsumerGroupSession) error {
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	logger.Info().Msg("in Setup")
 	// Mark the consumer as ready
 	close(consumer.ready)
@@ -126,7 +123,6 @@ func (consumer *Consumer) Setup(sarama.ConsumerGroupSession) error {
 
 // Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
 func (consumer *Consumer) Cleanup(sarama.ConsumerGroupSession) error {
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	logger.Info().Msg("in Cleanup")
 	return nil
 }
@@ -134,7 +130,6 @@ func (consumer *Consumer) Cleanup(sarama.ConsumerGroupSession) error {
 // ConsumeClaim must start a consumer loop of ConsumerGroupClaim's Messages().
 func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	logger.Info().Msg("in ConsumeClaim")
 	// NOTE:
 	// Do not move the code below to a goroutine.
@@ -151,6 +146,7 @@ func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 		session.MarkMessage(message, "")
 		if consumer.events != nil {
 			*consumer.events <- &record
+			recordsRecieved.Inc()
 		}
 	}
 
