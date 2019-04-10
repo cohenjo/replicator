@@ -1,10 +1,14 @@
 package main
 
 import (
-	"github.com/cohenjo/replicator/pkg/streams"
+	"github.com/cohenjo/replicator/pkg/config"
+	"github.com/cohenjo/replicator/pkg/replicator"
 )
 
 func main() {
-	streams.MongoStream()
-	streams.MySQLStream()
+
+	config.LoadConfiguration()
+	r := replicator.Replicator{}
+	r.Config()
+	r.Flow()
 }

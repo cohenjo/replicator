@@ -1,0 +1,38 @@
+# https://taskfile.dev
+
+version: '2'
+output: prefixed
+vars:
+  CONFIG: "replicator.conf.json"
+
+includes:
+  docker: ./.tasks/DockerTaskfile.yml
+  generate: ./.tasks/GenerateTaskfile.yml
+tasks:
+  default:
+    cmds:
+      - task: dev
+  
+  dev:
+    desc: Start developing localy on replicator
+    deps: 
+      - task: run
+        vars: {CONFIG: "conf/replicator.conf.json"}
+  
+  run:
+    desc: Run replicator 
+    deps: 
+      - mod
+      - docker:start
+    cmds:
+      - GO111MODULE=on go run cmd/replicator/main.go
+    sources: 
+      - ./**/*.go
+    method: checksum
+
+    
+  mod:
+    desc: download relevate modules
+    cmds:
+      - GO111MODULE=on go mod download
+

@@ -1,0 +1,14 @@
+# https://taskfile.dev
+
+version: '2'
+
+tasks:
+  graphql:
+    desc: Generate GraphQL Schema bindata.go
+    dir: pkg/graphql/schema
+    cmds:
+      - go generate -v
+    sources:
+      - pkg/graphql/**/*.graphql
+    generates:
+      - pkg/graphql/schema/bindata.go

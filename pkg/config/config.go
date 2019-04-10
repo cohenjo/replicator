@@ -7,6 +7,12 @@ import (
 	"github.com/spf13/viper"
 )
 
+type WaterFlows struct {
+	DBType     string
+	Schema     string
+	Collection string
+}
+
 //Configuration defines the base configuration that can be passed to the WASTE system
 type Configuration struct {
 	Debug      bool
@@ -17,6 +23,8 @@ type Configuration struct {
 	MyDBHost   string
 	MyDBUser   string
 	MyDBPasswd string
+	Streams    []WaterFlows
+	Estuaries  []WaterFlows
 }
 
 // Config is the global configuration variable
