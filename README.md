@@ -7,22 +7,20 @@
 ## General
 Replicator is a go package aimed to replicate data between data sources using change streams.
 
-It uses MySQL [replication](https://github.com/siddontang/go-mysql#replication) to read MySQL change stream like a replica.
+It uses MySQL [replication](https://github.com/siddontang/go-mysql#replication) to read MySQL change stream like a replica.  
 Mongo has [Change Streams](https://docs.mongodb.com/manual/changeStreams/#change-streams) - so this should be doable easily.  
 For Kafka I use [sarama](https://github.com/Shopify/sarama) - Kafka doesn't really have a change stream, but we use it as a bus to distribute change events cross data-centers.   
 PG also uses binary logs (WALS) to transfer replication - so that's also on the agenda.
 
 Once we got an event for a record change (insert/update/delete) we transform it using [kazaam](https://github.com/qntfy/kazaam) and propogate the change to the registered endpoints.    
-
 We support field mapping, field filtering, and maybe transformations.
-This is based off [kazaam](https://github.com/qntfy/kazaam).
+
 
 ## Getting started
 
-Generate a configuration file containing input streams, output estuaries and transformation to do on the records.
-you can define as many input/output paths.
-the transformation is using kazaam internally - so can do what kazaam can do...
-
+Generate a configuration file containing input streams, output estuaries and transformation to do on the records.  
+you can define as many input/output paths.  
+the transformation is using kazaam internally - so can do what kazaam can do...  
 ```
 go get -u github.com/cohenjo/replicator
 ```
