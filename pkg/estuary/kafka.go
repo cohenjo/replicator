@@ -1,12 +1,14 @@
 package estuary
 
 import (
+	"fmt"
 	"log"
 	"os"
 
 	"github.com/pquerna/ffjson/ffjson"
 
 	"github.com/Shopify/sarama"
+	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/rs/zerolog"
 )
@@ -50,13 +52,13 @@ func (s KafkaEndpoint) WriteEvent(record *events.RecordEvent) {
 	logger.Info().Msgf("record: %v", record)
 }
 
-func NewKafkaEndpoint(schema string, collection string) (endpoint KafkaEndpoint) {
-	brokers := []string{"localhost:9092"}
+func NewKafkaEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint KafkaEndpoint) {
+	brokers := []string{fmt.Sprintf("%s:%d", streamConfig.Host, streamConfig.Port)}
 	producer := newDataCollector(brokers)
 	endpoint = KafkaEndpoint{
 		producer: producer,
-		topic:    schema,
-		table:    collection,
+		topic:    streamConfig.Schema,
+		table:    streamConfig.Collection,
 	}
 	return endpoint
 }

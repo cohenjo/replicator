@@ -7,8 +7,10 @@ import (
 	"github.com/spf13/viper"
 )
 
-type WaterFlows struct {
-	DBType     string
+type WaterFlowsConfig struct {
+	Type       string
+	Host       string
+	Port       int
 	Schema     string
 	Collection string
 }
@@ -23,8 +25,8 @@ type Configuration struct {
 	MyDBHost   string
 	MyDBUser   string
 	MyDBPasswd string
-	Streams    []WaterFlows
-	Estuaries  []WaterFlows
+	Streams    []WaterFlowsConfig
+	Estuaries  []WaterFlowsConfig
 }
 
 // Config is the global configuration variable

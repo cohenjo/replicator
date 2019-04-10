@@ -1,6 +1,7 @@
 package streams
 
 import (
+	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/rs/zerolog/log"
 )
@@ -27,15 +28,15 @@ func SetupStreamManager(events *chan *events.RecordEvent) {
 	}
 }
 
-func (sm *StreamManagment) NewStream(streamType, schema, collection string) {
+func (sm *StreamManagment) NewStream(streamConfig *config.WaterFlowsConfig) {
 	var stream Stream
-	switch streamType {
+	switch streamConfig.Type {
 	case "MYSQL":
-		stream = NewMySQLStream(sm.events, schema, collection)
+		stream = NewMySQLStream(sm.events, streamConfig)
 	case "MONGO":
-		stream = NewMongoStream(sm.events, schema, collection)
+		stream = NewMongoStream(sm.events, streamConfig)
 	case "KAFKA":
-		stream = NewKafkaStream(sm.events, schema, collection)
+		stream = NewKafkaStream(sm.events, streamConfig)
 	}
 	sm.streams = append(sm.streams, stream)
 }
@@ -46,6 +47,10 @@ func (sm *StreamManagment) registerStreams(stream Stream) {
 
 func (em *StreamManagment) StartListening() {
 	for i, stream := range em.streams {
+		if stream == nil {
+			log.Error().Msgf("Missing stream: %d) ", i)
+			continue
+		}
 		log.Info().Msgf("Starting stream: %d) %s", i, stream.StreamType())
 		go stream.Listen()
 	}

@@ -10,7 +10,14 @@ func TestListen(t *testing.T) {
 
 	config.LoadConfiguration()
 	// streamer := MySQLStream{}
-	streamer := NewMySQLStream(nil, "test", "canal_test")
+	conf := &config.WaterFlowsConfig{
+		Type:       "mysql",
+		Host:       "localhost",
+		Port:       3306,
+		Schema:     "test",
+		Collection: "canal_test",
+	}
+	streamer := NewMySQLStream(nil, conf)
 	streamer.Listen()
 
 	t.Logf("Finished listenening - look at your terminal ")

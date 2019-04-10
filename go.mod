@@ -21,6 +21,7 @@ require (
 	github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8 // indirect
 	github.com/piquette/finance-go v1.0.0
 	github.com/pquerna/ffjson v0.0.0-20181028064349-e517b90714f7
+	github.com/prometheus/client_golang v0.9.2
 	github.com/qntfy/jsonparser v1.0.2 // indirect
 	github.com/qntfy/kazaam v3.4.7+incompatible // indirect
 	github.com/rs/zerolog v1.13.0

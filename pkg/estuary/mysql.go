@@ -25,15 +25,15 @@ type MySQLEndpoint struct {
 
 // logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 
-func NewMySQLEndpoint(schema string, collection string) (endpoint MySQLEndpoint) {
-	endpoint.db = schema
-	endpoint.tableName = collection
+func NewMySQLEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MySQLEndpoint) {
+	endpoint.db = streamConfig.Schema
+	endpoint.tableName = streamConfig.Collection
 
 	streamUri := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=true",
 		config.Config.MyDBUser,
 		config.Config.MyDBPasswd,
-		config.Config.MyDBHost, 3306,
-		schema,
+		streamConfig.Host, 3306,
+		streamConfig.Schema,
 	)
 	conn, err := sqlx.Open("mysql", streamUri)
 	if err != nil {

@@ -20,10 +20,10 @@ type MongoStream struct {
 	collection string
 }
 
-func NewMongoStream(events *chan *events.RecordEvent, schema string, collection string) (stream MongoStream) {
+func NewMongoStream(events *chan *events.RecordEvent, streamConfig *config.WaterFlowsConfig) (stream MongoStream) {
 	stream.events = events
-	stream.db = schema
-	stream.collection = collection
+	stream.db = streamConfig.Schema
+	stream.collection = streamConfig.Collection
 	return stream
 }
 

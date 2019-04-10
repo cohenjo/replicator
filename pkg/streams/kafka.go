@@ -2,11 +2,13 @@ package streams
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/pquerna/ffjson/ffjson"
 
 	"github.com/Shopify/sarama"
+	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/rs/zerolog"
 )
@@ -18,15 +20,17 @@ messages in the stream are just `ffjson.Marshel` events, we only unmarshel and a
 
 type KafkaStream struct {
 	events     *chan *events.RecordEvent
+	config     *config.WaterFlowsConfig
 	topic      string
 	collection string
 	client     *sarama.ConsumerGroup
 }
 
-func NewKafkaStream(events *chan *events.RecordEvent, schema string, collection string) (stream KafkaStream) {
+func NewKafkaStream(events *chan *events.RecordEvent, streamConfig *config.WaterFlowsConfig) (stream KafkaStream) {
 	stream.events = events
-	stream.topic = schema
-	stream.collection = collection
+	stream.topic = streamConfig.Schema
+	stream.collection = streamConfig.Collection
+	stream.config = streamConfig
 	return stream
 }
 
@@ -67,14 +71,14 @@ func (stream KafkaStream) Listen() {
 	// brokers := []string{"localhost:9092"}
 	topics := []string{"db-replicator"}
 	// group := "example"
-	client, err := sarama.NewClient([]string{"localhost:9092"}, config)
+	client, err := sarama.NewClient([]string{fmt.Sprintf("%s:%d", stream.config.Host, stream.config.Port)}, config)
 	if err != nil {
-		panic(err)
+		logger.Error().Err(err).Msg("failed to create client")
 	}
 	defer func() { _ = client.Close() }()
 
 	// Start a new consumer group
-	group, err := sarama.NewConsumerGroupFromClient("my-group", client)
+	group, err := sarama.NewConsumerGroupFromClient("my-groups", client)
 	if err != nil {
 		panic(err)
 	}

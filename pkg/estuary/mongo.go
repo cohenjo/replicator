@@ -21,10 +21,10 @@ type MongoEndpoint struct {
 	collection     *mongo.Collection
 }
 
-func NewMongoEndpoint(db string, collectionName string) (endpoint MongoEndpoint) {
+func NewMongoEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MongoEndpoint) {
 	// Set client options
 	ctx := context.Background()
-	uri := fmt.Sprintf("mongodb://%s:%s@%s:27017/admin", config.Config.DBUser, config.Config.DBPasswd, config.Config.DBHost)
+	uri := fmt.Sprintf("mongodb://%s:%s@%s:27017/admin", config.Config.DBUser, config.Config.DBPasswd, streamConfig.Host)
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		log.Error().Err(err).Msg("connection failure")
@@ -37,10 +37,10 @@ func NewMongoEndpoint(db string, collectionName string) (endpoint MongoEndpoint)
 	}
 
 	fmt.Println("Connected to MongoDB!")
-	collection := client.Database(db).Collection(collectionName)
+	collection := client.Database(streamConfig.Schema).Collection(streamConfig.Collection)
 	return MongoEndpoint{
-		db:             db,
-		collectionName: collectionName,
+		db:             streamConfig.Schema,
+		collectionName: streamConfig.Collection,
 		client:         client,
 		collection:     collection,
 	}

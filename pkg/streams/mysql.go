@@ -29,10 +29,10 @@ type MySQLStream struct {
 	syncer    *replication.BinlogSyncer
 }
 
-func NewMySQLStream(events *chan *events.RecordEvent, schema string, collection string) (stream MySQLStream) {
+func NewMySQLStream(events *chan *events.RecordEvent, streamConfig *config.WaterFlowsConfig) (stream MySQLStream) {
 	stream.events = events
-	stream.db = schema
-	stream.tableName = collection
+	stream.db = streamConfig.Schema
+	stream.tableName = streamConfig.Collection
 	return stream
 }
 

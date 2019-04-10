@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/rs/zerolog"
 )
@@ -28,6 +29,7 @@ type EndpointManagment struct {
 }
 
 var EndpointManager *EndpointManagment
+var logger *zerolog.Logger
 
 func SetupEndpointManager(events *chan *events.RecordEvent) {
 	EndpointManager = &EndpointManagment{
@@ -35,19 +37,21 @@ func SetupEndpointManager(events *chan *events.RecordEvent) {
 		endpoints:    make([]Endpoint, 0),
 		quit:         make(chan bool),
 	}
+	l := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	logger = &l
 }
 
-func (em *EndpointManagment) NewEstuary(streamType, schema, collection string) {
+func (em *EndpointManagment) NewEstuary(streamConfig *config.WaterFlowsConfig) {
 	var endpoint Endpoint
-	switch streamType {
+	switch streamConfig.Type {
 	case "MYSQL":
-		endpoint = NewMySQLEndpoint(schema, collection)
+		endpoint = NewMySQLEndpoint(streamConfig)
 	case "MONGO":
-		endpoint = NewMongoEndpoint(schema, collection)
+		endpoint = NewMongoEndpoint(streamConfig)
 	case "KAFKA":
-		endpoint = NewKafkaEndpoint(schema, collection)
+		endpoint = NewKafkaEndpoint(streamConfig)
 	case "ELASTIC":
-		endpoint = NewElasticEndpoint(schema, collection)
+		endpoint = NewElasticEndpoint(streamConfig)
 	case "STDOUT":
 		endpoint = StdoutEndpoint{}
 
