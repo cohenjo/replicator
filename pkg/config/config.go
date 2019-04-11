@@ -15,6 +15,11 @@ type WaterFlowsConfig struct {
 	Collection string
 }
 
+type TransformOperation struct {
+	Operation string                 `json:"operation"`
+	Spec      map[string]interface{} `json:"spec"`
+}
+
 //Configuration defines the base configuration that can be passed to the WASTE system
 type Configuration struct {
 	Debug      bool
@@ -27,6 +32,7 @@ type Configuration struct {
 	MyDBPasswd string
 	Streams    []WaterFlowsConfig
 	Estuaries  []WaterFlowsConfig
+	Transforms []TransformOperation
 }
 
 // Config is the global configuration variable

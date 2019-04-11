@@ -1,25 +1,21 @@
 package transform
 
 import (
+	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/pquerna/ffjson/ffjson"
 	"github.com/rs/zerolog/log"
 
 	kazaam "gopkg.in/qntfy/kazaam.v3"
 )
 
-type Operation struct {
-	Operation string                 `json:"operation"`
-	Spec      map[string]interface{} `json:"spec"`
-}
-
 type TransformationManager struct {
-	operations []Operation
+	operations []config.TransformOperation
 	k          *kazaam.Kazaam
 }
 
 func NewTransformer() *TransformationManager {
 	return &TransformationManager{
-		operations: make([]Operation, 0),
+		operations: make([]config.TransformOperation, 0),
 	}
 }
 
@@ -34,7 +30,7 @@ func (transformer *TransformationManager) Transform(data []byte) []byte {
 	return kazaamOut
 }
 
-func (transformer *TransformationManager) RegisterOperation(op Operation) {
+func (transformer *TransformationManager) RegisterOperation(op config.TransformOperation) {
 	transformer.operations = append(transformer.operations, op)
 }
 

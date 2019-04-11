@@ -1,6 +1,8 @@
 package replicator
 
 import (
+	"os"
+
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/estuary"
 	"github.com/cohenjo/replicator/pkg/events"
@@ -8,7 +10,7 @@ import (
 	"github.com/cohenjo/replicator/pkg/transform"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog"
 )
 
 type Replicator struct {
@@ -57,21 +59,21 @@ we will read all configuration files, configure the source and target points, an
 */
 func (replicator *Replicator) Config() {
 
-	log.Info().Msg("starting replicator configuration")
+	logger.Info().Msg("starting replicator configuration")
 	replicator.quit = make(chan bool)
 
 	// this should be 2 streams with transform in the middle...
 	replicator.eventStream = make(chan *events.RecordEvent, 1000)
 	replicator.eventEstuary = make(chan *events.RecordEvent, 1000)
 
-	log.Info().Msg("Configure streams")
+	logger.Info().Msg("Configure streams")
 	streams.SetupStreamManager(&replicator.eventStream)
 	for _, streamConfig := range config.Config.Streams {
 		streams.StreamManager.NewStream(&streamConfig)
 	}
 
 	//set the endpoints
-	log.Info().Msg("Configure endpoints")
+	logger.Info().Msg("Configure endpoints")
 	estuary.SetupEndpointManager(&replicator.eventEstuary)
 	for _, estuaryConfig := range config.Config.Estuaries {
 		estuary.EndpointManager.NewEstuary(&estuaryConfig)
@@ -81,10 +83,10 @@ func (replicator *Replicator) Config() {
 	// define the transformation.
 	// note we could easily move this inside the endpoints making the configuration even more crazy
 	replicator.transformer = transform.NewTransformer()
-	replicator.transformer.RegisterOperation(transform.Operation{
-		Operation: "shift",
-		Spec:      map[string]interface{}{"output": "t", "id": "id"},
-	})
+	for _, transformConfig := range config.Config.Transforms {
+		replicator.transformer.RegisterOperation(transformConfig)
+	}
+
 	replicator.transformer.InitializeTransformer()
 }
 

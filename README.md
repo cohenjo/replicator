@@ -6,6 +6,7 @@
 
 ## General
 Replicator is a go package aimed to replicate data between data sources using change streams.
+It aims to replicate anything to anything - MySQL, MongoDB, Kafka, Elastic and futurely many more
 
 It uses MySQL [replication](https://github.com/siddontang/go-mysql#replication) to read MySQL change stream like a replica.  
 Mongo has [Change Streams](https://docs.mongodb.com/manual/changeStreams/#change-streams) - so this should be doable easily.  
@@ -17,6 +18,9 @@ We support field mapping, field filtering, and maybe transformations.
 
 Metrics on input/output records are exposed via Prometheus.
 
+## General Flow
+
+![data flow](docs/replicator_flow.png)
 
 ## Getting started
 
