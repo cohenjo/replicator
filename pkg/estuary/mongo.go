@@ -52,7 +52,7 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 		logger.Error().Err(err).Msgf("Error while unmarshal record")
 		return
 	}
-	logger.Info().Str("action", record.Action).Str("name", std.collection.Name()).Msgf("write event: %+v", row)
+	logger.Debug().Str("action", record.Action).Str("name", std.collection.Name()).Msgf("write event: %+v", row)
 	var key events.RecordKey
 	err = ffjson.Unmarshal(record.OldData, &key)
 	if err != nil {
@@ -69,7 +69,7 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 			logger.Error().Err(err).Msgf("Error while inserting document")
 			return
 		}
-		logger.Info().Msgf("Inserted a single document: %s", insertResult.InsertedID)
+		logger.Debug().Msgf("Inserted a single document: %s", insertResult.InsertedID)
 	case "delete":
 
 		filter, err := bson.Marshal(key)
@@ -83,7 +83,7 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 			logger.Error().Err(err).Msgf("Failed to delete record")
 			return
 		}
-		logger.Info().Int("DeletedCount", int(deleteResult.DeletedCount)).Msg("record deleted properly")
+		logger.Debug().Int("DeletedCount", int(deleteResult.DeletedCount)).Msg("record deleted properly")
 	case "update":
 		filter, err := bson.Marshal(key)
 		if err != nil {
@@ -97,7 +97,7 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 			logger.Error().Err(err).Msgf("Failed to update record")
 			return
 		}
-		logger.Info().Int("MatchedCount", int(updateResult.MatchedCount)).Int("ModifiedCount", int(updateResult.ModifiedCount)).Msg("record Updated properly")
+		logger.Debug().Int("MatchedCount", int(updateResult.MatchedCount)).Int("ModifiedCount", int(updateResult.ModifiedCount)).Msg("record Updated properly")
 	}
 
 	// logger.Info().Msgf("record: %v", record)

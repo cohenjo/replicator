@@ -63,7 +63,7 @@ func LoadConfiguration() *Configuration {
 		log.Error().Err(err).Msg("unable to decode into struct")
 	}
 
-	log.Info().Msgf("configuration loaded: %+v", cfg)
+	log.Debug().Msgf("configuration loaded: %+v", cfg)
 
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	if cfg.Debug {

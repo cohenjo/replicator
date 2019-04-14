@@ -99,7 +99,7 @@ func (ee *ElasticEndpoint) WriteEvent(record *events.RecordEvent) {
 			logger.Error().Err(err).Msg("Error parsing the response body")
 		} else {
 			// Print the response status and indexed document version.
-			logger.Info().Str("status", res.Status()).Msgf(" %s; version=%d", r["result"], int(r["_version"].(float64)))
+			logger.Debug().Str("status", res.Status()).Msgf(" %s; version=%d", r["result"], int(r["_version"].(float64)))
 		}
 	}
 }

@@ -43,9 +43,9 @@ func (s KafkaEndpoint) WriteEvent(record *events.RecordEvent) {
 	} else {
 		// The tuple (topic, partition, offset) can be used as a unique identifier
 		// for a message in a Kafka cluster.
-		logger.Info().Msgf("Your data is stored with unique identifier important/%d/%d", partition, offset)
+		logger.Debug().Msgf("Your data is stored with unique identifier important/%d/%d", partition, offset)
 	}
-	logger.Info().Msgf("record: %v", record)
+	logger.Debug().Msgf("record: %v", record)
 }
 
 func NewKafkaEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint KafkaEndpoint) {
