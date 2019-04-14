@@ -47,7 +47,7 @@ func main() {
 	r.Comma = ','
 	r.Comment = '#'
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 10000; i++ {
 		record, err := r.Read()
 		if err == io.EOF {
 			logger.Info().Err(err).Msg("Reached file end")
@@ -86,7 +86,7 @@ func main() {
 		}
 
 		// Don't finish too fast ~5h
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 
 	}
 	logger.Info().Msg("done")

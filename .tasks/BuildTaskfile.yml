@@ -12,4 +12,4 @@ tasks:
     desc: replicator command
     cmds:
       # - GOOS=linux go build -ldflags="-s -w" -o ../bin/replicator cmd/replicator/main.go
-      - GOOS=linux go build  -o ../bin/replicator cmd/replicator/main.go
+      - go build  -o ../bin/replicator cmd/replicator/main.go
