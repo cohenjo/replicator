@@ -8,7 +8,7 @@ const (
 )
 
 type RecordKey struct {
-	ID string `json:"id" bson:"_id"`
+	ID string `json:"id" bson:"id"`
 }
 
 /*

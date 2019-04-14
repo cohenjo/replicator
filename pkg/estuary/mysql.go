@@ -1,6 +1,7 @@
 package estuary
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -58,18 +59,36 @@ func (std MySQLEndpoint) WriteEvent(record *events.RecordEvent) {
 		values.WriteString(std.tableName)
 		values.WriteString(" values(")
 		first := true
-		for key, _ := range row {
-			// logger.Info().Msgf("Key: %s, Value: %s ", key, value)
+		for key, value := range row {
+			logger.Info().Msgf("Key: %s, type ", key)
+			switch v := value.(type) {
+			case string:
+				logger.Info().Msgf("Key: %s, value %s - string ", key, v)
+				row[key] = v
+			default:
+				logger.Info().Msgf("Key: %s, is not string", key)
+			}
 			if !first {
 				values.WriteString(",")
 			}
 			values.WriteString(fmt.Sprintf(":%s", key))
+			// values.WriteString("?")
 			first = false
 
 		}
+
 		values.WriteString(")")
-		logger.Info().Msgf("Insert stmnt: %s", values.String())
-		_, _ = std.conn.NamedExec(values.String(), row)
+		row["id"], _ = hex.DecodeString(row["id"].(string))
+		logger.Info().Msgf("Insert stmnt: %s, record: %v", values.String(), row)
+		tx := std.conn.MustBegin()
+		res, err := tx.NamedExec(values.String(), row)
+		if err != nil {
+			log.Error().Err(err).Msgf("Error inserting to MySQL. res: %v", res)
+		}
+		err = tx.Commit()
+		if err != nil {
+			log.Error().Err(err).Msgf("Commit error")
+		}
 
 	case "delete":
 	case "update":

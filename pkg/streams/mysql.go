@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -201,10 +202,18 @@ func (stream MySQLStream) handleRowsEvent(e *replication.BinlogEvent) error {
 	case events.InsertAction, events.DeleteAction:
 		for _, row := range ev.Rows {
 
+			documentKey := make([]byte, hex.EncodedLen(len(row[0].(string))))
+			hex.Encode(documentKey, []byte(row[0].(string)))
+			documentPKey, err := ffjson.Marshal(events.RecordKey{ID: string(documentKey)})
+			if err != nil {
+				logger.Error().Err(err).Msgf("error marshel doc key:  ")
+			}
+
 			toJson := make(map[string]interface{})
 			for i, val := range row {
 				toJson[stream.table.Columns[i].Name] = val
 			}
+			toJson["id"] = string(documentKey)
 			data, err := ffjson.Marshal(toJson)
 			if err != nil {
 				logger.Error().Err(err).Msg("could not marshel the row")
@@ -214,6 +223,7 @@ func (stream MySQLStream) handleRowsEvent(e *replication.BinlogEvent) error {
 				Action:     action,
 				Schema:     schema,
 				Collection: table,
+				OldData:    documentPKey,
 				Data:       data,
 			}
 

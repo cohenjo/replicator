@@ -65,7 +65,7 @@ func (stream MongoStream) Listen() {
 			next := cs.Current
 			action, _ := strconv.Unquote(next.Lookup("operationType").String())
 
-			documentKey, err := ffjson.Marshal(events.RecordKey{ID: next.Lookup("documentKey").Document().Lookup("_id").ObjectID().Hex()})
+			documentKey, err := ffjson.Marshal(events.RecordKey{ID: next.Lookup("fullDocument").Document().Lookup("id").StringValue()})
 			if err != nil {
 				logger.Error().Err(err).Msgf("error marshel doc key:  ")
 			}

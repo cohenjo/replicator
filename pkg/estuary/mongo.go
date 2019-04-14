@@ -7,7 +7,6 @@ import (
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/pquerna/ffjson/ffjson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"gopkg.in/mgo.v2/bson"
@@ -60,9 +59,8 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 		logger.Error().Err(err).Msgf("Error while Unmarshal key")
 		return
 	}
-	oid, _ := primitive.ObjectIDFromHex(key.ID)
 
-	row["_id"] = oid
+	row["id"] = key.ID
 
 	switch record.Action {
 	case "insert":

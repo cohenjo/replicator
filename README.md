@@ -32,9 +32,7 @@ go get -u github.com/cohenjo/replicator
 ```
 
 Schema should be there before you start the replicator - it does not replicat schema change events .
-you should have a unique ID named: 
-MySQL: ID
-Mongo: _id
+you should have a unique ID named `id` 
 
 
 ## Performance Status
