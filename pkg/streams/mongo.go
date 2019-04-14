@@ -3,6 +3,7 @@ package streams
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/cohenjo/replicator/pkg/config"
@@ -62,11 +63,9 @@ func (stream MongoStream) Listen() {
 		ok := cs.Next(ctx)
 		if ok {
 			next := cs.Current
-			action := next.Lookup("operationType").String()
+			action, _ := strconv.Unquote(next.Lookup("operationType").String())
 
-			toJsonKey := make(map[string]interface{})
-			next.Lookup("documentKey").Unmarshal(&toJsonKey)
-			documentKey, err := ffjson.Marshal(toJsonKey)
+			documentKey, err := ffjson.Marshal(events.RecordKey{ID: next.Lookup("documentKey").Document().Lookup("_id").ObjectID().Hex()})
 			if err != nil {
 				logger.Error().Err(err).Msgf("error marshel doc key:  ")
 			}

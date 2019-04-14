@@ -67,7 +67,7 @@ func (stream KafkaStream) Listen() {
 
 	ctx := context.Background()
 	// brokers := []string{"localhost:9092"}
-	topics := []string{"db-replicator"}
+	topics := []string{stream.topic}
 	// group := "example"
 	client, err := sarama.NewClient([]string{fmt.Sprintf("%s:%d", stream.config.Host, stream.config.Port)}, config)
 	if err != nil {
@@ -76,7 +76,7 @@ func (stream KafkaStream) Listen() {
 	defer func() { _ = client.Close() }()
 
 	// Start a new consumer group
-	group, err := sarama.NewConsumerGroupFromClient("replicator-group", client)
+	group, err := sarama.NewConsumerGroupFromClient("replicator-grps13", client)
 	if err != nil {
 		panic(err)
 	}
@@ -143,7 +143,7 @@ func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 			continue
 		}
 		logger.Info().Msgf("Message claimed: value = %s, timestamp = %v, topic = %s", record.Action, message.Timestamp, message.Topic)
-		session.MarkMessage(message, "")
+		// session.MarkMessage(message, "")
 		if consumer.events != nil {
 			*consumer.events <- &record
 			recordsRecieved.Inc()

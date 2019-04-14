@@ -7,8 +7,10 @@ import (
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/pquerna/ffjson/ffjson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"gopkg.in/mgo.v2/bson"
 )
 
 type MongoEndpoint struct {
@@ -48,20 +50,56 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 	row := make(map[string]interface{})
 	err := ffjson.Unmarshal(record.Data, &row)
 	if err != nil {
-		logger.Error().Err(err).Msgf("Error while connecting to source MySQL db")
+		logger.Error().Err(err).Msgf("Error while unmarshal record")
+		return
 	}
+	logger.Info().Str("action", record.Action).Str("name", std.collection.Name()).Msgf("write event: %+v", row)
+	var key events.RecordKey
+	err = ffjson.Unmarshal(record.OldData, &key)
+	if err != nil {
+		logger.Error().Err(err).Msgf("Error while Unmarshal key")
+		return
+	}
+	oid, _ := primitive.ObjectIDFromHex(key.ID)
+
+	row["_id"] = oid
 
 	switch record.Action {
 	case "insert":
 		insertResult, err := std.collection.InsertOne(context.TODO(), row)
 		if err != nil {
 			logger.Error().Err(err).Msgf("Error while inserting document")
+			return
 		}
-		fmt.Println("Inserted a single document: ", insertResult.InsertedID)
+		logger.Info().Msgf("Inserted a single document: %s", insertResult.InsertedID)
 	case "delete":
-	case "update":
-		logger.Info().Msgf("update not yes supported , %s", record.Action)
 
+		filter, err := bson.Marshal(key)
+		if err != nil {
+			logger.Error().Err(err).Msgf("Error while Marshal filter")
+			return
+		}
+
+		deleteResult, err := std.collection.DeleteMany(context.TODO(), filter)
+		if err != nil {
+			logger.Error().Err(err).Msgf("Failed to delete record")
+			return
+		}
+		logger.Info().Int("DeletedCount", int(deleteResult.DeletedCount)).Msg("record deleted properly")
+	case "update":
+		filter, err := bson.Marshal(key)
+		if err != nil {
+			logger.Error().Err(err).Msgf("Error while Marshal filter")
+			return
+		}
+
+		logger.Info().Msgf("update not yes supported , %s", record.Action)
+		updateResult, err := std.collection.UpdateOne(context.TODO(), filter, row)
+		if err != nil {
+			logger.Error().Err(err).Msgf("Failed to update record")
+			return
+		}
+		logger.Info().Int("MatchedCount", int(updateResult.MatchedCount)).Int("ModifiedCount", int(updateResult.ModifiedCount)).Msg("record Updated properly")
 	}
 
 	// logger.Info().Msgf("record: %v", record)

@@ -31,6 +31,12 @@ the transformation is using kazaam internally - so can do what kazaam can do...
 go get -u github.com/cohenjo/replicator
 ```
 
+Schema should be there before you start the replicator - it does not replicat schema change events .
+you should have a unique ID named: 
+MySQL: ID
+Mongo: _id
+
+
 ## Performance Status
 
 Current implemenatation is rather "local" in design - it reads from the source streams, transforms and writes to endpoints.

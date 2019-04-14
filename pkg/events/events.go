@@ -7,6 +7,10 @@ const (
 	DeleteAction = "delete"
 )
 
+type RecordKey struct {
+	ID string `json:"id" bson:"_id"`
+}
+
 /*
 RecordEvent is a record change event.
 It's an attempt to allign all record change events to a unified structure.

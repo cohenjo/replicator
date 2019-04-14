@@ -15,7 +15,7 @@ tasks:
   docker-network:
     desc: Create user network
     cmds:
-      - cmd: docker network create replicator-net
+      - cmd: docker network ls | grep replicator-net || docker network create replicator-net
   
   create-container:
     deps: [docker-network]
