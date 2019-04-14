@@ -47,6 +47,17 @@ func main() {
 	r.Comma = ','
 	r.Comment = '#'
 
+	insrtStmt := `Insert into names values(unhex(replace(uuid(),'-','')),'%s',%d,'%s',%d)`
+
+	streamUri := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=true",
+		user, pass, host, 3306, db,
+	)
+	conn, err := sqlx.Open("mysql", streamUri)
+	if err != nil {
+		logger.Error().Err(err).Msgf("Error while connecting to source MySQL db")
+	}
+	defer conn.Close()
+
 	for i := 0; i < 10000; i++ {
 		record, err := r.Read()
 		if err == io.EOF {
@@ -65,15 +76,6 @@ func main() {
 			Count:  Count,
 		}
 		logger.Info().Str("name", r.Name).Int("year", r.Year).Str("gender", r.Gender).Int("Count", r.Count).Msg("record")
-		insrtStmt := `Insert into names values(unhex(replace(uuid(),'-','')),'%s',%d,'%s',%d)`
-
-		streamUri := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=true",
-			user, pass, host, 3306, db,
-		)
-		conn, err := sqlx.Open("mysql", streamUri)
-		if err != nil {
-			logger.Error().Err(err).Msgf("Error while connecting to source MySQL db")
-		}
 
 		tx := conn.MustBegin()
 		res, err := tx.Exec(fmt.Sprintf(insrtStmt, r.Name, r.Year, r.Gender, r.Count))
@@ -86,7 +88,7 @@ func main() {
 		}
 
 		// Don't finish too fast ~5h
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 	}
 	logger.Info().Msg("done")
