@@ -5,18 +5,18 @@
 ![replicator logo](docs/replicator_long_logo.png)
 
 ## General
-Replicator is a go package aimed to replicate data between data sources using change streams.
-It aims to replicate anything to anything - MySQL, MongoDB, Kafka, Elastic and futurely many more
+Replicator is a go package that replicates data between multiple data sources using change streams.
+It can replicate data between any sources, including MySQL, MongoDB, Kafka, Elastic and others in the future.
 
-It uses MySQL [replication](https://github.com/siddontang/go-mysql#replication) to read MySQL change stream like a replica.  
-Mongo has [Change Streams](https://docs.mongodb.com/manual/changeStreams/#change-streams) - so this should be doable easily.  
-For Kafka I use [sarama](https://github.com/Shopify/sarama) - Kafka doesn't really have a change stream, but we use it as a bus to distribute change events cross data-centers.   
-PG also uses binary logs (WALS) to transfer replication - so that's also on the agenda.
+Replicator uses MySQL [replication](https://github.com/siddontang/go-mysql#replication) to read a MySQL change stream as a replica.
+Mongo includes [Change Streams](https://docs.mongodb.com/manual/changeStreams/#change-streams), so this is a cinch.
+For Kafka, Replicator uses [sarama](https://github.com/Shopify/sarama). Kafka doesn't really have a change stream, but we use it as a bus to distribute change events across data centres. 
+PG uses binary logs (WALS) to transfer replication, so that's technically feasible, but not yet implemented.
 
-Once we got an event for a record change (insert/update/delete) we transform it using [kazaam](https://github.com/qntfy/kazaam) and propogate the change to the registered endpoints.    
-We support field mapping, field filtering, and maybe transformations.
+Once Replicator receives an event for a record change, such as insert, update, delete, we transform it using [kazaam](https://github.com/qntfy/kazaam) and propagate the change to the registered database endpoints.
+We support field mapping, field filtering, and transformations. For example, you can change column names or field names during replication.
 
-Metrics on input/output records are exposed via Prometheus.
+Metrics on input/output records are exposed using Prometheus.
 
 ## General Flow
 
@@ -24,14 +24,15 @@ Metrics on input/output records are exposed via Prometheus.
 
 ## Getting started
 
-Generate a configuration file containing input streams, output estuaries and transformation to do on the records.  
-you can define as many input/output paths.  
-the transformation is using kazaam internally - so can do what kazaam can do...  
+Generate a configuration file containing input streams, output estuaries, and the transformations you want to perform on the records.
+You can define multiple input/output paths.
+Note: transformations are done using kazaam, so features and limitations are those of kazaam.
 ```
 go get -u github.com/cohenjo/replicator
 ```
 
-Schema should be there before you start the replicator - it does not replicat schema change events .
+The schema must exist before you start the replicator. Also, Replicator does not replicate schema change events.
+
 you should have a unique ID named `id` 
 
 
@@ -73,4 +74,4 @@ If the deployment has remote endpoints it might be better to use a replicated ka
 ## License
 `reflector` is licensed under MIT License. 
 Some of the components used are Licensed under Apache License, Version 2.0
-Please review before using in comurcial environments.
+Please review before using in commercial environments.

@@ -7,7 +7,7 @@ vars:
 
 includes:
   docker: ./.tasks/DockerTaskfile.yml
-  generate: ./.tasks/GenerateTaskfile.yml
+  build: ./.tasks/BuildTaskfile.yml
 tasks:
   default:
     cmds:

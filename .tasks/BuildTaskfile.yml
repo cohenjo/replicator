@@ -1,0 +1,15 @@
+# https://taskfile.dev
+
+version: '2'
+
+tasks:
+  loader:
+    desc: names loader command
+    cmds:
+      - go build -o ../bin/name_loader cmd/name_loader/main.go
+
+  replicator:
+    desc: replicator command
+    cmds:
+      # - GOOS=linux go build -ldflags="-s -w" -o ../bin/replicator cmd/replicator/main.go
+      - GOOS=linux go build  -o ../bin/replicator cmd/replicator/main.go
