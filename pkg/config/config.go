@@ -22,17 +22,17 @@ type TransformOperation struct {
 
 //Configuration defines the base configuration that can be passed to the WASTE system
 type Configuration struct {
-	Debug      bool
-	Execute    bool
-	DBHost     string
-	DBUser     string
-	DBPasswd   string
-	MyDBHost   string
-	MyDBUser   string
-	MyDBPasswd string
-	Streams    []WaterFlowsConfig
-	Estuaries  []WaterFlowsConfig
-	Transforms []TransformOperation
+	Debug              bool
+	Execute            bool
+	StreamQueueLength  int
+	EstuaryQueueLength int
+	DBUser             string
+	DBPasswd           string
+	MyDBUser           string
+	MyDBPasswd         string
+	Streams            []WaterFlowsConfig
+	Estuaries          []WaterFlowsConfig
+	Transforms         []TransformOperation
 }
 
 // Config is the global configuration variable
@@ -43,6 +43,8 @@ func LoadConfiguration() *Configuration {
 
 	viper.SetDefault("Debug", true)
 	viper.SetDefault("Execute", false)
+	viper.SetDefault("StreamQueueLength", 10000)
+	viper.SetDefault("EstuaryQueueLength", 10000)
 
 	viper.SetConfigName("replicator.conf")   // name of config file (without extension)
 	viper.AddConfigPath("/etc/replicator/")  // path to look for the config file in

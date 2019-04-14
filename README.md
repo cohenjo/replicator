@@ -47,6 +47,7 @@ If the deployment has remote endpoints it might be better to use a replicated ka
  - [ ] Support of all CRUD ops
  - [ ] Grafana Dashboard - extend dashboard
  - [ ] Load tool 
+ - [ ] Demo with all functionality
 
 ## Alternatives
 

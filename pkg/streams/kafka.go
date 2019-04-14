@@ -76,7 +76,7 @@ func (stream KafkaStream) Listen() {
 	defer func() { _ = client.Close() }()
 
 	// Start a new consumer group
-	group, err := sarama.NewConsumerGroupFromClient("my-groups", client)
+	group, err := sarama.NewConsumerGroupFromClient("replicator-group", client)
 	if err != nil {
 		panic(err)
 	}

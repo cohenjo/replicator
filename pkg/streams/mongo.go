@@ -7,6 +7,7 @@ import (
 
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
+	"github.com/pquerna/ffjson/ffjson"
 
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -49,7 +50,7 @@ func (stream MongoStream) Listen() {
 
 	cs, err := collection.Watch(ctx, mongo.Pipeline{}, options.ChangeStream().SetFullDocument(options.UpdateLookup))
 	if err != nil {
-		logger.Error().Err(err).Msgf("error failed to watch: %v \n", err)
+		logger.Error().Err(err).Msgf("error failed to watch: \n")
 	}
 
 	// defer cs.Close(ctx)
@@ -62,8 +63,20 @@ func (stream MongoStream) Listen() {
 		if ok {
 			next := cs.Current
 			action := next.Lookup("operationType").String()
-			documentKey := []byte(next.Lookup("documentKey").String())
-			data := []byte(next.Lookup("fullDocument").String())
+
+			toJsonKey := make(map[string]interface{})
+			next.Lookup("documentKey").Unmarshal(&toJsonKey)
+			documentKey, err := ffjson.Marshal(toJsonKey)
+			if err != nil {
+				logger.Error().Err(err).Msgf("error marshel doc key:  ")
+			}
+
+			toJson := make(map[string]interface{})
+			next.Lookup("fullDocument").Unmarshal(&toJson)
+			data, err := ffjson.Marshal(toJson)
+			if err != nil {
+				logger.Error().Err(err).Msgf("error enmarshal:  ")
+			}
 
 			record := &events.RecordEvent{
 				Action:     action,
@@ -74,7 +87,7 @@ func (stream MongoStream) Listen() {
 			}
 
 			if stream.events != nil {
-				logger.Debug().Str("action", action).Msgf("row: %s", string(data))
+				logger.Debug().Str("action", action).Msgf("row: %s key: %s", string(data), string(documentKey))
 				*stream.events <- record
 				recordsRecieved.Inc()
 			}

@@ -63,8 +63,8 @@ func (replicator *Replicator) Config() {
 	replicator.quit = make(chan bool)
 
 	// this should be 2 streams with transform in the middle...
-	replicator.eventStream = make(chan *events.RecordEvent, 1000)
-	replicator.eventEstuary = make(chan *events.RecordEvent, 1000)
+	replicator.eventStream = make(chan *events.RecordEvent, config.Config.StreamQueueLength)
+	replicator.eventEstuary = make(chan *events.RecordEvent, config.Config.EstuaryQueueLength)
 
 	logger.Info().Msg("Configure streams")
 	streams.SetupStreamManager(&replicator.eventStream)

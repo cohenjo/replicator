@@ -35,6 +35,6 @@ require (
 	golang.org/x/sync v0.0.0-20190227155943-e225da77a7e6 // indirect
 	golang.org/x/tools v0.0.0-20190330180304-aef51cc3777c // indirect
 	google.golang.org/appengine v1.5.0
-	gopkg.in/mgo.v2 v2.0.0-20180705113604-9856a29383ce // indirect
+	gopkg.in/mgo.v2 v2.0.0-20180705113604-9856a29383ce
 	gopkg.in/qntfy/kazaam.v3 v3.4.7
 )

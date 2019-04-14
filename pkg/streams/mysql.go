@@ -159,7 +159,45 @@ func (stream MySQLStream) handleRowsEvent(e *replication.BinlogEvent) error {
 
 	switch action {
 	case events.UpdateAction:
-		logger.Error().Msg("don't support update yet")
+		// logger.Error().Msg("don't support update yet")
+		for i := 1; i <= len(ev.Rows); i += 2 {
+			oldRow := ev.Rows[i-1]
+			row := ev.Rows[i]
+
+			toOldJson := make(map[string]interface{})
+			for i, val := range oldRow {
+				toOldJson[stream.table.Columns[i].Name] = val
+			}
+			oldData, err := ffjson.Marshal(toOldJson)
+			if err != nil {
+				logger.Error().Err(err).Msg("could not marshel the row")
+				continue
+			}
+
+			toJson := make(map[string]interface{})
+			for i, val := range row {
+				toJson[stream.table.Columns[i].Name] = val
+			}
+			data, err := ffjson.Marshal(toJson)
+			if err != nil {
+				logger.Error().Err(err).Msg("could not marshel the row")
+				continue
+			}
+			record := &events.RecordEvent{
+				Action:     action,
+				Schema:     schema,
+				Collection: table,
+				OldData:    oldData,
+				Data:       data,
+			}
+
+			if stream.events != nil {
+				logger.Debug().Str("action", action).Msgf("row: %s", string(data))
+				*stream.events <- record
+				recordsRecieved.Inc()
+			}
+
+		}
 	case events.InsertAction, events.DeleteAction:
 		for _, row := range ev.Rows {
 
