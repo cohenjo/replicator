@@ -22,7 +22,6 @@ If this works ok for mock - then add snappy...
 type KafkaEndpoint struct {
 	producer sarama.SyncProducer
 	topic    string
-	table    string
 }
 
 func (s KafkaEndpoint) WriteEvent(record *events.RecordEvent) {
@@ -55,7 +54,6 @@ func NewKafkaEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint KafkaEndp
 	endpoint = KafkaEndpoint{
 		producer: producer,
 		topic:    streamConfig.Schema,
-		table:    streamConfig.Collection,
 	}
 	return endpoint
 }

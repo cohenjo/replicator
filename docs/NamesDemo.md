@@ -1,5 +1,8 @@
 # Demo
 
+We'll do a simple demo to distribute names from MySQL to other data sources.
+names taken from https://www.kaggle.com/kaggle/us-baby-names#NationalNames.csv
+
 ## MySQL Setup
 
 ```sql
