@@ -8,10 +8,12 @@
 Replicator is a go package that replicates data between multiple data sources using change streams.
 It can replicate data between any sources, including MySQL, MongoDB, Kafka, Elastic and others in the future.
 
-Replicator uses MySQL [replication](https://github.com/siddontang/go-mysql#replication) to read a MySQL change stream as a replica.
+Replicator uses MySQL [replication](https://github.com/siddontang/go-mysql#replication) to read a MySQL change stream as a replica. (including AWS RDS)  
 Mongo includes [Change Streams](https://docs.mongodb.com/manual/changeStreams/#change-streams), so this is a cinch.
 For Kafka, Replicator uses [sarama](https://github.com/Shopify/sarama). Kafka doesn't really have a change stream, but we use it as a bus to distribute change events across data centres. 
-PG uses binary logs (WALS) to transfer replication, so that's technically feasible, but not yet implemented.
+PG uses binary logs (WALS) to transfer replication, so that's technically feasible, but not yet implemented.  
+AWS DynamoDB provides change stream API and official [AWS-SDK-go](https://github.com/aws/aws-sdk-go) and even [example code](https://github.com/aws/aws-sdk-go/blob/master/service/dynamodbstreams/examples_test.go)  
+
 
 Once Replicator receives an event for a record change, such as insert, update, delete, we transform it using [kazaam](https://github.com/qntfy/kazaam) and propagate the change to the registered database endpoints.
 We support field mapping, field filtering, and transformations. For example, you can change column names or field names during replication.
