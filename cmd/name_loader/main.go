@@ -58,7 +58,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	for i := 0; i < 10000; i++ {
+	for {
 		record, err := r.Read()
 		if err == io.EOF {
 			logger.Info().Err(err).Msg("Reached file end")

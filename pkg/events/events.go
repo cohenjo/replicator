@@ -27,3 +27,7 @@ type RecordEvent struct {
 	OldData []byte // Used for updates.
 	Data    []byte // let's keep a json here to use Kazaam
 }
+
+type KafkaMessage struct {
+	Payload RecordEvent `json:"payload"`
+}

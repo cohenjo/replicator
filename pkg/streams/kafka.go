@@ -136,18 +136,21 @@ func (consumer *Consumer) ConsumeClaim(session sarama.ConsumerGroupSession, clai
 	// The `ConsumeClaim` itself is called within a goroutine, see:
 	// https://github.com/Shopify/sarama/blob/master/consumer_group.go#L27-L29
 	for message := range claim.Messages() {
-		var record events.RecordEvent
+		// var record events.RecordEvent
+		var record events.KafkaMessage
 		err := ffjson.Unmarshal(message.Value, &record)
 		if err != nil {
 			logger.Error().Err(err).Msgf("guess it wasn't an event")
 			continue
 		}
-		logger.Info().Msgf("Message claimed: value = %s, timestamp = %v, topic = %s", record.Action, message.Timestamp, message.Topic)
-		// session.MarkMessage(message, "")
+		logger.Info().Msgf("Message claimed: value = %s, timestamp = %v, topic = %s", record.Payload.Action, message.Timestamp, message.Topic)
+
 		if consumer.events != nil {
-			*consumer.events <- &record
+			*consumer.events <- &record.Payload
 			recordsRecieved.Inc()
 		}
+		// Mark the message as consumed *after* you pass it to the events channel
+		session.MarkMessage(message, "replicator")
 	}
 
 	return nil

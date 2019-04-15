@@ -28,7 +28,7 @@ func (s KafkaEndpoint) WriteEvent(record *events.RecordEvent) {
 	// We are not setting a message key, which means that all messages will
 	// be distributed randomly over the different partitions.
 
-	data, err := ffjson.Marshal(record)
+	data, err := ffjson.Marshal(events.KafkaMessage{Payload: *record})
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to send event... :( ")
 	}
