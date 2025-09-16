@@ -36,8 +36,6 @@ func NewMongoEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MongoEndp
 		uri = fmt.Sprintf("mongodb://%s:%s@%s:%d/admin", config.Global.DBUser, config.Global.DBPasswd, streamConfig.Host, streamConfig.Port)
 	}
 	
-	fmt.Printf("[DEBUG] Connecting to MongoDB with URI: %s\n", uri)
-	
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		logger.Error().Err(err).Msg("connection failure")
