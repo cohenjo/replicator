@@ -1,0 +1,437 @@
+package position
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/sirupsen/logrus"
+)
+
+// AzureStorageTracker implements position tracking using Azure Blob Storage
+type AzureStorageTracker struct {
+	config      *AzureStorageConfig
+	client      *azblob.Client
+	mutex       sync.RWMutex
+	logger      *logrus.Logger
+	closed      bool
+	leases      map[string]string // track blob leases for locking
+	leaseMutex  sync.RWMutex
+}
+
+// NewAzureStorageTracker creates a new Azure Storage based position tracker
+func NewAzureStorageTracker(config *AzureStorageConfig) (*AzureStorageTracker, error) {
+	if config == nil {
+		return nil, fmt.Errorf("azure storage config is required")
+	}
+	
+	if config.AccountName == "" && config.ConnectionString == "" {
+		return nil, fmt.Errorf("either account name or connection string is required")
+	}
+	
+	if config.ContainerName == "" {
+		return nil, fmt.Errorf("container name is required")
+	}
+	
+	// Set defaults
+	if config.BlobPrefix == "" {
+		config.BlobPrefix = "positions"
+	}
+	
+	if config.LeaseTimeout == 0 {
+		config.LeaseTimeout = 60 * time.Second
+	}
+	
+	// Create Azure blob client
+	var client *azblob.Client
+	var err error
+	
+	if config.ConnectionString != "" {
+		client, err = azblob.NewClientFromConnectionString(config.ConnectionString, nil)
+	} else {
+		credential, credErr := azblob.NewSharedKeyCredential(config.AccountName, config.AccountKey)
+		if credErr != nil {
+			return nil, fmt.Errorf("failed to create credential: %w", credErr)
+		}
+		
+		serviceURL := fmt.Sprintf("https://%s.blob.core.windows.net/", config.AccountName)
+		client, err = azblob.NewClientWithSharedKeyCredential(serviceURL, credential, nil)
+	}
+	
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Azure blob client: %w", err)
+	}
+	
+	tracker := &AzureStorageTracker{
+		config: config,
+		client: client,
+		logger: logrus.New(),
+		closed: false,
+		leases: make(map[string]string),
+	}
+	
+	tracker.logger.WithFields(logrus.Fields{
+		"account_name":   config.AccountName,
+		"container_name": config.ContainerName,
+		"blob_prefix":    config.BlobPrefix,
+		"lease_locking":  config.UseLeaseBasedLocking,
+	}).Info("Created Azure Storage based position tracker")
+	
+	// Ensure container exists
+	if err := tracker.ensureContainer(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to ensure container exists: %w", err)
+	}
+	
+	return tracker, nil
+}
+
+// Save stores the position to Azure Blob Storage
+func (ast *AzureStorageTracker) Save(ctx context.Context, streamID string, position Position, metadata map[string]interface{}) error {
+	ast.mutex.Lock()
+	defer ast.mutex.Unlock()
+	
+	if ast.closed {
+		return ErrTrackerClosed
+	}
+	
+	// Serialize position
+	positionData, err := position.Serialize()
+	if err != nil {
+		return fmt.Errorf("failed to serialize position: %w", err)
+	}
+	
+	// Create position record
+	record := PositionRecord{
+		StreamID:     streamID,
+		PositionData: positionData,
+		Metadata: Metadata{
+			Timestamp:  time.Now(),
+			Version:    "1.0",
+			StreamType: getStreamTypeFromMetadata(metadata),
+			Custom:     metadata,
+		},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	
+	// Check if blob exists to preserve created timestamp
+	blobName := ast.getBlobName(streamID)
+	if existingRecord, err := ast.loadPositionRecord(ctx, blobName); err == nil {
+		record.CreatedAt = existingRecord.CreatedAt
+	}
+	
+	// Marshal to JSON
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal position record: %w", err)
+	}
+	
+	// Acquire lease if configured
+	var leaseID string
+	if ast.config.UseLeaseBasedLocking {
+		leaseID, err = ast.acquireLease(ctx, streamID)
+		if err != nil {
+			return fmt.Errorf("failed to acquire lease: %w", err)
+		}
+		defer ast.releaseLease(ctx, streamID, leaseID)
+	}
+	
+	// Upload blob
+	if err := ast.uploadBlob(ctx, blobName, data, leaseID); err != nil {
+		return fmt.Errorf("failed to upload blob: %w", err)
+	}
+	
+	ast.logger.WithFields(logrus.Fields{
+		"stream_id": streamID,
+		"position":  position.String(),
+		"blob_name": blobName,
+	}).Debug("Saved position to Azure Storage")
+	
+	return nil
+}
+
+// Load retrieves the position from Azure Blob Storage
+func (ast *AzureStorageTracker) Load(ctx context.Context, streamID string) (Position, map[string]interface{}, error) {
+	ast.mutex.RLock()
+	defer ast.mutex.RUnlock()
+	
+	if ast.closed {
+		return nil, nil, ErrTrackerClosed
+	}
+	
+	blobName := ast.getBlobName(streamID)
+	record, err := ast.loadPositionRecord(ctx, blobName)
+	if err != nil {
+		if strings.Contains(err.Error(), "BlobNotFound") {
+			return nil, nil, ErrPositionNotFound
+		}
+		return nil, nil, fmt.Errorf("failed to load position record: %w", err)
+	}
+	
+	// Create a generic position for deserialization
+	// In a real implementation, we'd need to determine the position type
+	var position Position
+	
+	ast.logger.WithFields(logrus.Fields{
+		"stream_id":  streamID,
+		"created_at": record.CreatedAt,
+		"updated_at": record.UpdatedAt,
+		"blob_name":  blobName,
+	}).Debug("Loaded position from Azure Storage")
+	
+	return position, record.Metadata.Custom, nil
+}
+
+// Delete removes the position blob
+func (ast *AzureStorageTracker) Delete(ctx context.Context, streamID string) error {
+	ast.mutex.Lock()
+	defer ast.mutex.Unlock()
+	
+	if ast.closed {
+		return ErrTrackerClosed
+	}
+	
+	blobName := ast.getBlobName(streamID)
+	
+	// Acquire lease if configured
+	var leaseID string
+	var err error
+	if ast.config.UseLeaseBasedLocking {
+		leaseID, err = ast.acquireLease(ctx, streamID)
+		if err != nil && !strings.Contains(err.Error(), "BlobNotFound") {
+			return fmt.Errorf("failed to acquire lease: %w", err)
+		}
+	}
+	
+	// Delete blob
+	blobClient := ast.client.ServiceClient().NewContainerClient(ast.config.ContainerName).NewBlobClient(blobName)
+	
+	var deleteOptions *azblob.DeleteBlobOptions
+	if leaseID != "" {
+		deleteOptions = &azblob.DeleteBlobOptions{
+			AccessConditions: &azblob.AccessConditions{
+				LeaseAccessConditions: &azblob.LeaseAccessConditions{
+					LeaseID: &leaseID,
+				},
+			},
+		}
+	}
+	
+	_, err = blobClient.Delete(ctx, deleteOptions)
+	if err != nil && !strings.Contains(err.Error(), "BlobNotFound") {
+		return fmt.Errorf("failed to delete blob: %w", err)
+	}
+	
+	ast.logger.WithFields(logrus.Fields{
+		"stream_id": streamID,
+		"blob_name": blobName,
+	}).Info("Deleted position blob from Azure Storage")
+	
+	return nil
+}
+
+// List returns all stored positions
+func (ast *AzureStorageTracker) List(ctx context.Context) (map[string]Position, error) {
+	ast.mutex.RLock()
+	defer ast.mutex.RUnlock()
+	
+	if ast.closed {
+		return nil, ErrTrackerClosed
+	}
+	
+	positions := make(map[string]Position)
+	
+	// List blobs with the configured prefix
+	containerClient := ast.client.ServiceClient().NewContainerClient(ast.config.ContainerName)
+	prefix := ast.config.BlobPrefix + "/"
+	
+	pager := containerClient.NewListBlobsFlatPager(&azblob.ListBlobsFlatOptions{
+		Prefix: &prefix,
+	})
+	
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list blobs: %w", err)
+		}
+		
+		for _, blob := range page.Segment.BlobItems {
+			// Extract stream ID from blob name
+			streamID := ast.extractStreamID(*blob.Name)
+			if streamID == "" {
+				continue
+			}
+			
+			record, err := ast.loadPositionRecord(ctx, *blob.Name)
+			if err != nil {
+				ast.logger.WithError(err).WithField("blob", *blob.Name).Warn("Failed to load position record")
+				continue
+			}
+			
+			// Create position from record (simplified)
+			var position Position
+			positions[streamID] = position
+		}
+	}
+	
+	return positions, nil
+}
+
+// Close releases resources
+func (ast *AzureStorageTracker) Close() error {
+	ast.mutex.Lock()
+	defer ast.mutex.Unlock()
+	
+	ast.closed = true
+	
+	// Release any active leases
+	ast.leaseMutex.Lock()
+	for streamID, leaseID := range ast.leases {
+		ast.releaseLease(context.Background(), streamID, leaseID)
+	}
+	ast.leases = make(map[string]string)
+	ast.leaseMutex.Unlock()
+	
+	ast.logger.Info("Closed Azure Storage based position tracker")
+	
+	return nil
+}
+
+// HealthCheck verifies the tracker is operational
+func (ast *AzureStorageTracker) HealthCheck(ctx context.Context) error {
+	if ast.closed {
+		return ErrTrackerClosed
+	}
+	
+	// Try to list blobs to verify connectivity
+	containerClient := ast.client.ServiceClient().NewContainerClient(ast.config.ContainerName)
+	pager := containerClient.NewListBlobsFlatPager(&azblob.ListBlobsFlatOptions{
+		MaxResults: &[]int32{1}[0],
+	})
+	
+	if pager.More() {
+		_, err := pager.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("Azure Storage health check failed: %w", err)
+		}
+	}
+	
+	return nil
+}
+
+// ensureContainer ensures the container exists
+func (ast *AzureStorageTracker) ensureContainer(ctx context.Context) error {
+	containerClient := ast.client.ServiceClient().NewContainerClient(ast.config.ContainerName)
+	
+	_, err := containerClient.Create(ctx, &azblob.CreateContainerOptions{})
+	if err != nil && !strings.Contains(err.Error(), "ContainerAlreadyExists") {
+		return fmt.Errorf("failed to create container: %w", err)
+	}
+	
+	return nil
+}
+
+// getBlobName generates the blob name for a stream ID
+func (ast *AzureStorageTracker) getBlobName(streamID string) string {
+	return fmt.Sprintf("%s/%s.json", ast.config.BlobPrefix, streamID)
+}
+
+// extractStreamID extracts the stream ID from a blob name
+func (ast *AzureStorageTracker) extractStreamID(blobName string) string {
+	prefix := ast.config.BlobPrefix + "/"
+	if !strings.HasPrefix(blobName, prefix) {
+		return ""
+	}
+	
+	name := strings.TrimPrefix(blobName, prefix)
+	name = strings.TrimSuffix(name, ".json")
+	
+	return name
+}
+
+// loadPositionRecord loads a position record from a blob
+func (ast *AzureStorageTracker) loadPositionRecord(ctx context.Context, blobName string) (*PositionRecord, error) {
+	blobClient := ast.client.ServiceClient().NewContainerClient(ast.config.ContainerName).NewBlobClient(blobName)
+	
+	response, err := blobClient.DownloadStream(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	
+	var record PositionRecord
+	if err := json.NewDecoder(response.Body).Decode(&record); err != nil {
+		return nil, fmt.Errorf("failed to decode position record: %w", err)
+	}
+	
+	return &record, nil
+}
+
+// uploadBlob uploads data to a blob
+func (ast *AzureStorageTracker) uploadBlob(ctx context.Context, blobName string, data []byte, leaseID string) error {
+	blobClient := ast.client.ServiceClient().NewContainerClient(ast.config.ContainerName).NewBlobClient(blobName)
+	
+	var uploadOptions *azblob.UploadBufferOptions
+	if leaseID != "" {
+		uploadOptions = &azblob.UploadBufferOptions{
+			AccessConditions: &azblob.AccessConditions{
+				LeaseAccessConditions: &azblob.LeaseAccessConditions{
+					LeaseID: &leaseID,
+				},
+			},
+		}
+	}
+	
+	_, err := blobClient.UploadBuffer(ctx, data, uploadOptions)
+	return err
+}
+
+// acquireLease acquires a lease on the position blob
+func (ast *AzureStorageTracker) acquireLease(ctx context.Context, streamID string) (string, error) {
+	if !ast.config.UseLeaseBasedLocking {
+		return "", nil
+	}
+	
+	blobName := ast.getBlobName(streamID)
+	blobClient := ast.client.ServiceClient().NewContainerClient(ast.config.ContainerName).NewBlobClient(blobName)
+	
+	// Try to acquire lease
+	duration := int32(ast.config.LeaseTimeout.Seconds())
+	response, err := blobClient.GetBlobLeaseClient("").AcquireLease(ctx, duration, nil)
+	if err != nil {
+		return "", err
+	}
+	
+	leaseID := *response.LeaseID
+	
+	// Track the lease
+	ast.leaseMutex.Lock()
+	ast.leases[streamID] = leaseID
+	ast.leaseMutex.Unlock()
+	
+	return leaseID, nil
+}
+
+// releaseLease releases a lease on the position blob
+func (ast *AzureStorageTracker) releaseLease(ctx context.Context, streamID string, leaseID string) {
+	if leaseID == "" {
+		return
+	}
+	
+	blobName := ast.getBlobName(streamID)
+	blobClient := ast.client.ServiceClient().NewContainerClient(ast.config.ContainerName).NewBlobClient(blobName)
+	
+	_, err := blobClient.GetBlobLeaseClient(leaseID).ReleaseLease(ctx, nil)
+	if err != nil {
+		ast.logger.WithError(err).WithField("stream_id", streamID).Warn("Failed to release lease")
+	}
+	
+	// Remove from tracking
+	ast.leaseMutex.Lock()
+	delete(ast.leases, streamID)
+	ast.leaseMutex.Unlock()
+}

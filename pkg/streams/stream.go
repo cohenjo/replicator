@@ -40,16 +40,9 @@ func SetupStreamManager(events *chan *events.RecordEvent) {
 }
 
 func (sm *StreamManagment) NewStream(streamConfig *config.WaterFlowsConfig) {
-	var stream Stream
-	switch streamConfig.Type {
-	case "MYSQL":
-		stream = NewMySQLStream(sm.events, streamConfig)
-	case "MONGO":
-		stream = NewMongoStream(sm.events, streamConfig)
-	case "KAFKA":
-		stream = NewKafkaStream(sm.events, streamConfig)
-	}
-	sm.streams = append(sm.streams, stream)
+	// Legacy stream management - deprecated in favor of new service-based approach
+	// This function is kept for backwards compatibility but no longer creates streams
+	logger.Info().Str("type", streamConfig.Type).Msg("Legacy stream creation called - use new service-based approach instead")
 }
 
 func (sm *StreamManagment) registerStreams(stream Stream) {

@@ -26,16 +26,28 @@ Metrics on input/output records are exposed using Prometheus.
 
 ## Getting started
 
-Generate a configuration file containing input streams, output estuaries, and the transformations you want to perform on the records.
-You can define multiple input/output paths.
-Note: transformations are done using kazaam, so features and limitations are those of kazaam.
-```
+### Quick Start
+For complete step-by-step instructions to run Replicator locally with working examples, see the **[Local Setup Guide](docs/local-setup-guide.md)**.
+
+The guide includes:
+- ✅ **MySQL to Elasticsearch** - Real-time binlog replication with search indexing
+- ✅ **MongoDB to MongoDB** - Change stream replication between MongoDB instances
+- Docker setup, configuration, and testing procedures
+- Troubleshooting and monitoring
+
+### Installation
+```bash
 go get -u github.com/cohenjo/replicator
 ```
 
+### Configuration
+Generate a configuration file containing input streams, output estuaries, and the transformations you want to perform on the records.
+You can define multiple input/output paths.
+Note: transformations are done using kazaam, so features and limitations are those of kazaam.
+
 The schema must exist before you start the replicator. Also, Replicator does not replicate schema change events.
 
-you should have a unique ID named `id` 
+You should have a unique ID named `id` 
 
 
 ## Performance Status

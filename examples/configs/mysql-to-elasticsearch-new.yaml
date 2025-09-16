@@ -1,0 +1,103 @@
+# MySQL to Elasticsearch Replication Configuration (Updated for New Stream System)
+# This demonstrates streaming MySQL data to Elasticsearch for search indexing
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  metrics_port: 9090
+
+logging:
+  level: "info"
+  format: "json"
+
+# New streams configuration format
+streams:
+  - name: "mysql-products-to-elasticsearch"
+    enabled: true
+    batch_size: 1000
+    buffer_size: 10000
+    
+    # Source configuration (MySQL)
+    source:
+      type: "mysql"
+      host: "127.0.0.1"
+      port: 3306
+      database: "source_db"
+      username: "replicator"
+      password: "password123"
+      options:
+        table: "products"
+        server_id: 100
+        binlog_enabled: true
+    
+    # Target configuration (Elasticsearch)
+    target:
+      type: "elasticsearch"
+      host: "localhost"
+      port: 9200
+      database: "products"  # index name
+      options:
+        index: "products"
+        doc_type: "_doc"
+        bulk_size: 100
+        bulk_timeout: "10s"
+        workers: 2
+        retry_max_attempts: 3
+        retry_initial_interval: "1s"
+        retry_max_interval: "30s"
+    
+    # Optional transformation rules
+    transformation:
+      enabled: true
+      engine: "kazaam"
+      rules:
+        - name: "product-mapping"
+          enabled: true
+          priority: 1
+          actions:
+            - type: "field_map"
+              spec: |
+                {
+                  "product_id": "$.id",
+                  "title": "$.name",
+                  "description": "$.description",
+                  "price": "$.price",
+                  "category": "$.category_id",
+                  "indexed_at": "$.updated_at"
+                }
+        
+        - name: "field-enrichment"
+          enabled: true
+          priority: 2
+          actions:
+            - type: "computed_field"
+              spec: |
+                {
+                  "search_keywords": "{$.name} {$.description}",
+                  "price_range": "if $.price < 50 then 'budget' elif $.price < 200 then 'mid-range' else 'premium' end"
+                }
+      
+      error_handling:
+        strategy: "continue"
+        log_errors: true
+        max_retries: 3
+
+monitoring:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  health:
+    enabled: true
+    path: "/health"
+  prometheus:
+    enabled: true
+    namespace: "replicator"
+    subsystem: "mysql_elasticsearch"
+
+# Azure configuration (for future deployment)
+azure:
+  enabled: false
+  
+# Global authentication settings
+authentication:
+  enabled: false

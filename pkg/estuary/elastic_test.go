@@ -9,9 +9,16 @@ import (
 
 func TestIndex(t *testing.T) {
 
-	config.LoadConfiguration()
+	// Don't call LoadConfiguration() in tests - just use test config directly
+	// config.LoadConfiguration()
 	// streamer := MySQLStream{}
-	ee := NewElasticEndpoint("test", "canal_test")
+	
+	// Create a test config for the endpoint
+	testConfig := &config.WaterFlowsConfig{
+		Host: "localhost",
+		Port: 9200,
+	}
+	ee := NewElasticEndpoint(testConfig)
 
 	record := &events.RecordEvent{
 		Action: "insert",

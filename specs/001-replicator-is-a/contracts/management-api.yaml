@@ -1,0 +1,408 @@
+openapi: 3.0.3
+info:
+  title: Replicator Management API
+  description: Management and monitoring API for the database replication service
+  version: 1.0.0
+  
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns the health status of the replicator service
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /metrics:
+    get:
+      summary: Prometheus metrics endpoint
+      description: Returns metrics in Prometheus format
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Metrics data
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP replicator_events_processed_total Total number of events processed
+                  # TYPE replicator_events_processed_total counter
+                  replicator_events_processed_total{stream_id="stream1"} 1234
+
+  /streams:
+    get:
+      summary: List all replication streams
+      description: Returns information about all configured replication streams
+      operationId: listStreams
+      responses:
+        '200':
+          description: List of streams
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StreamStatus'
+
+  /streams/{streamId}:
+    get:
+      summary: Get stream details
+      description: Returns detailed information about a specific replication stream
+      operationId: getStream
+      parameters:
+        - name: streamId
+          in: path
+          required: true
+          description: Unique identifier of the stream
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Stream details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StreamDetails'
+        '404':
+          description: Stream not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /streams/{streamId}/pause:
+    post:
+      summary: Pause a replication stream
+      description: Temporarily stops processing for the specified stream
+      operationId: pauseStream
+      parameters:
+        - name: streamId
+          in: path
+          required: true
+          description: Unique identifier of the stream
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Stream paused successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '404':
+          description: Stream not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /streams/{streamId}/resume:
+    post:
+      summary: Resume a paused replication stream
+      description: Resumes processing for a paused stream
+      operationId: resumeStream
+      parameters:
+        - name: streamId
+          in: path
+          required: true
+          description: Unique identifier of the stream
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Stream resumed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '404':
+          description: Stream not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /streams/{streamId}/position:
+    get:
+      summary: Get stream replication position
+      description: Returns the current replication position for the stream
+      operationId: getStreamPosition
+      parameters:
+        - name: streamId
+          in: path
+          required: true
+          description: Unique identifier of the stream
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current replication position
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplicationPosition'
+        '404':
+          description: Stream not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /config/reload:
+    post:
+      summary: Reload configuration
+      description: Triggers a reload of the configuration file
+      operationId: reloadConfig
+      responses:
+        '200':
+          description: Configuration reloaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '400':
+          description: Configuration validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      required:
+        - status
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall health status
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp of health check
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional health check details
+        streams:
+          type: array
+          items:
+            $ref: '#/components/schemas/StreamHealth'
+          description: Health status of individual streams
+
+    StreamHealth:
+      type: object
+      required:
+        - stream_id
+        - status
+      properties:
+        stream_id:
+          type: string
+          description: Unique identifier of the stream
+        status:
+          type: string
+          enum: [running, paused, error, stopped]
+          description: Current stream status
+        last_event_time:
+          type: string
+          format: date-time
+          description: Timestamp of last processed event
+        error_message:
+          type: string
+          description: Error message if status is error
+
+    StreamStatus:
+      type: object
+      required:
+        - stream_id
+        - name
+        - status
+        - created_at
+      properties:
+        stream_id:
+          type: string
+          description: Unique identifier of the stream
+        name:
+          type: string
+          description: Human-readable stream name
+        status:
+          type: string
+          enum: [running, paused, error, stopped]
+          description: Current stream status
+        created_at:
+          type: string
+          format: date-time
+          description: When the stream was created
+        last_activity:
+          type: string
+          format: date-time
+          description: Last activity timestamp
+        events_processed:
+          type: integer
+          format: int64
+          description: Total number of events processed
+        current_lag:
+          type: string
+          description: Current replication lag
+
+    StreamDetails:
+      allOf:
+        - $ref: '#/components/schemas/StreamStatus'
+        - type: object
+          properties:
+            source:
+              $ref: '#/components/schemas/DatabaseInfo'
+            destination:
+              $ref: '#/components/schemas/DatabaseInfo'
+            transformation:
+              $ref: '#/components/schemas/TransformationInfo'
+            metrics:
+              $ref: '#/components/schemas/StreamMetrics'
+            recent_errors:
+              type: array
+              items:
+                $ref: '#/components/schemas/ErrorInfo'
+
+    DatabaseInfo:
+      type: object
+      required:
+        - type
+        - database
+      properties:
+        type:
+          type: string
+          description: Database type
+        database:
+          type: string
+          description: Database name
+        collection_table:
+          type: string
+          description: Collection or table name (if specified)
+
+    TransformationInfo:
+      type: object
+      properties:
+        transformation_id:
+          type: string
+          description: Transformation rule identifier
+        name:
+          type: string
+          description: Transformation rule name
+        type:
+          type: string
+          description: Transformation engine type
+
+    StreamMetrics:
+      type: object
+      properties:
+        events_per_second:
+          type: number
+          format: double
+          description: Current events per second rate
+        average_processing_time:
+          type: number
+          format: double
+          description: Average event processing time in milliseconds
+        error_rate:
+          type: number
+          format: double
+          description: Error rate as percentage
+        total_errors:
+          type: integer
+          format: int64
+          description: Total number of errors
+
+    ReplicationPosition:
+      type: object
+      required:
+        - stream_id
+        - position
+        - timestamp
+      properties:
+        stream_id:
+          type: string
+          description: Stream identifier
+        position:
+          type: string
+          description: Database-specific position token
+        timestamp:
+          type: string
+          format: date-time
+          description: When position was last updated
+        event_count:
+          type: integer
+          format: int64
+          description: Number of events processed at this position
+
+    OperationResult:
+      type: object
+      required:
+        - success
+        - message
+      properties:
+        success:
+          type: boolean
+          description: Whether the operation succeeded
+        message:
+          type: string
+          description: Result message
+        timestamp:
+          type: string
+          format: date-time
+          description: When the operation was performed
+
+    ErrorInfo:
+      type: object
+      required:
+        - timestamp
+        - message
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: When the error occurred
+        message:
+          type: string
+          description: Error message
+        event_id:
+          type: string
+          description: ID of the event that caused the error (if applicable)
+        error_code:
+          type: string
+          description: Error code for categorization
+
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error type
+        message:
+          type: string
+          description: Error message
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional error details

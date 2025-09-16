@@ -1,0 +1,602 @@
+package api
+
+import (
+	// ConfigUpdateRequest represents a configuration update request
+type ConfigUpdateRequest struct {
+	Streams    []config.StreamConfig     `json:\"streams,omitempty\"`
+	Server     *config.ServerConfig      `json:\"server,omitempty\"`
+	Metrics    *config.MetricsConfig     `json:\"metrics,omitempty\"`
+	Logging    *config.LoggingConfig     `json:\"logging,omitempty\"`
+	Transform  *config.TransformationRule `json:\"transform,omitempty\"`
+	Monitoring *config.MonitorConfig     `json:\"monitoring,omitempty\"`
+	Restart    bool                      `json:\"restart,omitempty\"`
+}son"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/cohenjo/replicator/pkg/config"
+	"github.com/rs/zerolog/log"
+)
+
+// ConfigResponse represents the current configuration in API responses
+type ConfigResponse struct {
+	Version    string                    `json:"version"`
+	UpdatedAt  time.Time                 `json:"updated_at"`
+	Streams    []config.StreamConfig     `json:"streams"`
+	Server     config.ServerConfig       `json:"server"`
+	Metrics    config.MetricsConfig      `json:"metrics"`
+	Logging    config.LoggingConfig      `json:"logging"`
+}
+
+// ConfigUpdateRequest represents a request to update configuration
+type ConfigUpdateRequest struct {
+	Streams    []config.StreamConfig     `json:"streams,omitempty"`
+	Server     *config.ServerConfig      `json:"server,omitempty"`
+	Metrics    *config.MetricsConfig     `json:"metrics,omitempty"`
+	Logging    *config.LoggingConfig     `json:"logging,omitempty"`
+}
+	Transform  *config.TransformRule     `json:"transform,omitempty"`
+	Monitoring *config.MonitoringConfig  `json:"monitoring,omitempty"`
+	Restart    bool                      `json:"restart,omitempty"`
+}
+
+// ConfigValidationResponse represents the result of configuration validation
+type ConfigValidationResponse struct {
+	Valid      bool                    `json:"valid"`
+	Errors     []ConfigValidationError `json:"errors,omitempty"`
+	Warnings   []ConfigValidationError `json:"warnings,omitempty"`
+	CheckedAt  time.Time              `json:"checked_at"`
+}
+
+// ConfigValidationError represents a configuration validation error or warning
+type ConfigValidationError struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+	Code    string `json:"code"`
+}
+
+// ConfigReloadResponse represents the result of a configuration reload
+type ConfigReloadResponse struct {
+	Success        bool      `json:"success"`
+	Message        string    `json:"message"`
+	ReloadedAt     time.Time `json:"reloaded_at"`
+	PreviousHash   string    `json:"previous_hash,omitempty"`
+	NewHash        string    `json:"new_hash,omitempty"`
+	RestartRequired bool     `json:"restart_required"`
+	AffectedStreams []string `json:"affected_streams,omitempty"`
+}
+
+// ConfigBackupResponse represents a configuration backup
+type ConfigBackupResponse struct {
+	ID        string          `json:"id"`
+	Version   string          `json:"version"`
+	CreatedAt time.Time       `json:"created_at"`
+	Config    ConfigResponse  `json:"config"`
+	Hash      string          `json:"hash"`
+}
+
+// ConfigManager defines the interface for managing configuration
+type ConfigManager interface {
+	GetConfig() (*config.Config, error)
+	UpdateConfig(req ConfigUpdateRequest) (*config.Config, error)
+	ReloadConfig() (*ConfigReloadResponse, error)
+	ValidateConfig(cfg *config.Config) (*ConfigValidationResponse, error)
+	BackupConfig() (*ConfigBackupResponse, error)
+	RestoreConfig(backupID string) (*config.Config, error)
+	ListBackups() ([]ConfigBackupResponse, error)
+	GetConfigHash() string
+	WatchConfigChanges() (<-chan *config.Config, error)
+}
+
+// ConfigService implements the ConfigManager interface
+type ConfigService struct {
+	currentConfig *config.Config
+	configPath    string
+	backups       map[string]*ConfigBackupResponse // In-memory backup store for demo
+	watchers      []chan *config.Config
+}
+
+// NewConfigService creates a new configuration service
+func NewConfigService(cfg *config.Config, configPath string) *ConfigService {
+	return &ConfigService{
+		currentConfig: cfg,
+		configPath:    configPath,
+		backups:       make(map[string]*ConfigBackupResponse),
+		watchers:      make([]chan *config.Config, 0),
+	}
+}
+
+// GetConfig returns the current configuration
+func (c *ConfigService) GetConfig() (*config.Config, error) {
+	if c.currentConfig == nil {
+		return nil, fmt.Errorf("no configuration loaded")
+	}
+	return c.currentConfig, nil
+}
+
+// UpdateConfig updates the current configuration
+func (c *ConfigService) UpdateConfig(req ConfigUpdateRequest) (*config.Config, error) {
+	if c.currentConfig == nil {
+		return nil, fmt.Errorf("no configuration loaded")
+	}
+
+	// Create a copy of current config
+	newConfig := *c.currentConfig
+
+	// Apply updates
+	if req.Streams != nil {
+		newConfig.Streams = req.Streams
+	}
+	if req.Global != nil {
+		newConfig.Global = *req.Global
+	}
+	if req.Sources != nil {
+		// TODO: Handle sources update
+	}
+	if req.Targets != nil {
+		// TODO: Handle targets update
+	}
+	if req.Transform != nil {
+		// TODO: Handle transform update
+	}
+	if req.Monitoring != nil {
+		newConfig.Monitoring = *req.Monitoring
+	}
+
+	// Validate new configuration
+	validation, err := c.ValidateConfig(&newConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to validate config: %w", err)
+	}
+	if !validation.Valid {
+		return nil, fmt.Errorf("configuration validation failed: %d errors", len(validation.Errors))
+	}
+
+	// Backup current config before updating
+	if _, err := c.BackupConfig(); err != nil {
+		log.Warn().Err(err).Msg("Failed to backup config before update")
+	}
+
+	// Update current config
+	c.currentConfig = &newConfig
+
+	// Notify watchers
+	c.notifyWatchers(&newConfig)
+
+	log.Info().
+		Int("streams_count", len(newConfig.Streams)).
+		Bool("restart_requested", req.Restart).
+		Msg("Configuration updated successfully")
+
+	return &newConfig, nil
+}
+
+// ReloadConfig reloads configuration from the file system
+func (c *ConfigService) ReloadConfig() (*ConfigReloadResponse, error) {
+	previousHash := c.GetConfigHash()
+
+	// TODO: Implement actual file reloading
+	// For now, simulate a reload by returning the current config
+	
+	newHash := c.GetConfigHash()
+	
+	response := &ConfigReloadResponse{
+		Success:         true,
+		Message:         "Configuration reloaded successfully",
+		ReloadedAt:      time.Now(),
+		PreviousHash:    previousHash,
+		NewHash:         newHash,
+		RestartRequired: previousHash != newHash,
+		AffectedStreams: []string{}, // TODO: Determine affected streams
+	}
+
+	if previousHash != newHash {
+		// Notify watchers of config change
+		c.notifyWatchers(c.currentConfig)
+		
+		// TODO: Determine which streams need restart
+		if c.currentConfig != nil {
+			for _, stream := range c.currentConfig.Streams {
+				response.AffectedStreams = append(response.AffectedStreams, stream.Name)
+			}
+		}
+	}
+
+	log.Info().
+		Str("previous_hash", previousHash).
+		Str("new_hash", newHash).
+		Bool("restart_required", response.RestartRequired).
+		Int("affected_streams", len(response.AffectedStreams)).
+		Msg("Configuration reload completed")
+
+	return response, nil
+}
+
+// ValidateConfig validates a configuration
+func (c *ConfigService) ValidateConfig(cfg *config.Config) (*ConfigValidationResponse, error) {
+	response := &ConfigValidationResponse{
+		Valid:     true,
+		Errors:    []ConfigValidationError{},
+		Warnings:  []ConfigValidationError{},
+		CheckedAt: time.Now(),
+	}
+
+	// Validate global config
+	if cfg.Global.MaxConcurrentStreams <= 0 {
+		response.Errors = append(response.Errors, ConfigValidationError{
+			Path:    "global.max_concurrent_streams",
+			Message: "must be greater than 0",
+			Code:    "INVALID_VALUE",
+		})
+	}
+
+	// Validate streams
+	streamNames := make(map[string]bool)
+	for i, stream := range cfg.Streams {
+		// Check for duplicate stream names
+		if streamNames[stream.Name] {
+			response.Errors = append(response.Errors, ConfigValidationError{
+				Path:    fmt.Sprintf("streams[%d].name", i),
+				Message: fmt.Sprintf("duplicate stream name: %s", stream.Name),
+				Code:    "DUPLICATE_NAME",
+			})
+		}
+		streamNames[stream.Name] = true
+
+		// Validate stream config
+		if err := stream.Validate(); err != nil {
+			response.Errors = append(response.Errors, ConfigValidationError{
+				Path:    fmt.Sprintf("streams[%d]", i),
+				Message: err.Error(),
+				Code:    "VALIDATION_ERROR",
+			})
+		}
+
+		// Add warnings for potential issues
+		if stream.Source.Type == stream.Target.Type {
+			response.Warnings = append(response.Warnings, ConfigValidationError{
+				Path:    fmt.Sprintf("streams[%d]", i),
+				Message: "source and target have the same type, this might not be optimal",
+				Code:    "SAME_SOURCE_TARGET_TYPE",
+			})
+		}
+	}
+
+	// Validate monitoring config
+	if cfg.Monitoring != nil {
+		if cfg.Monitoring.PrometheusPort <= 0 || cfg.Monitoring.PrometheusPort > 65535 {
+			response.Errors = append(response.Errors, ConfigValidationError{
+				Path:    "monitoring.prometheus_port",
+				Message: "must be a valid port number (1-65535)",
+				Code:    "INVALID_PORT",
+			})
+		}
+	}
+
+	// Set validation result
+	response.Valid = len(response.Errors) == 0
+
+	log.Debug().
+		Bool("valid", response.Valid).
+		Int("errors", len(response.Errors)).
+		Int("warnings", len(response.Warnings)).
+		Msg("Configuration validation completed")
+
+	return response, nil
+}
+
+// BackupConfig creates a backup of the current configuration
+func (c *ConfigService) BackupConfig() (*ConfigBackupResponse, error) {
+	if c.currentConfig == nil {
+		return nil, fmt.Errorf("no configuration to backup")
+	}
+
+	backup := &ConfigBackupResponse{
+		ID:        generateBackupID(),
+		Version:   "1.0", // TODO: Get from config or build info
+		CreatedAt: time.Now(),
+		Config:    c.configToResponse(c.currentConfig),
+		Hash:      c.GetConfigHash(),
+	}
+
+	// Store backup
+	c.backups[backup.ID] = backup
+
+	log.Info().
+		Str("backup_id", backup.ID).
+		Str("config_hash", backup.Hash).
+		Msg("Configuration backup created")
+
+	return backup, nil
+}
+
+// RestoreConfig restores configuration from a backup
+func (c *ConfigService) RestoreConfig(backupID string) (*config.Config, error) {
+	backup, exists := c.backups[backupID]
+	if !exists {
+		return nil, fmt.Errorf("backup with ID %s not found", backupID)
+	}
+
+	// Convert backup back to config
+	// TODO: Implement proper conversion from ConfigResponse to config.Config
+	// For now, we'll simulate restoration
+	
+	log.Info().
+		Str("backup_id", backupID).
+		Time("backup_created", backup.CreatedAt).
+		Msg("Configuration restored from backup")
+
+	// Notify watchers
+	c.notifyWatchers(c.currentConfig)
+
+	return c.currentConfig, nil
+}
+
+// ListBackups returns all available configuration backups
+func (c *ConfigService) ListBackups() ([]ConfigBackupResponse, error) {
+	backups := make([]ConfigBackupResponse, 0, len(c.backups))
+	for _, backup := range c.backups {
+		backups = append(backups, *backup)
+	}
+
+	// Sort by creation time (newest first)
+	// TODO: Implement sorting
+
+	return backups, nil
+}
+
+// GetConfigHash returns a hash of the current configuration
+func (c *ConfigService) GetConfigHash() string {
+	if c.currentConfig == nil {
+		return ""
+	}
+	// TODO: Implement proper config hashing
+	return fmt.Sprintf("hash_%d", time.Now().Unix())
+}
+
+// WatchConfigChanges returns a channel for configuration change notifications
+func (c *ConfigService) WatchConfigChanges() (<-chan *config.Config, error) {
+	ch := make(chan *config.Config, 1)
+	c.watchers = append(c.watchers, ch)
+	return ch, nil
+}
+
+// notifyWatchers notifies all watchers of configuration changes
+func (c *ConfigService) notifyWatchers(cfg *config.Config) {
+	for _, watcher := range c.watchers {
+		select {
+		case watcher <- cfg:
+		default:
+			// Channel is full, skip this watcher
+			log.Warn().Msg("Config watcher channel full, skipping notification")
+		}
+	}
+}
+
+// configToResponse converts config.Config to ConfigResponse
+func (c *ConfigService) configToResponse(cfg *config.Config) ConfigResponse {
+	return ConfigResponse{
+		Version:    "1.0", // TODO: Get from config or build info
+		UpdatedAt:  time.Now(),
+		Streams:    cfg.Streams,
+		Global:     cfg.Global,
+		Sources:    make(map[string]interface{}),    // TODO: Populate from config
+		Targets:    make(map[string]interface{}),    // TODO: Populate from config
+		Transform:  nil,                             // TODO: Get from config
+		Monitoring: &cfg.Monitoring,
+	}
+}
+
+// ConfigHandler handles HTTP requests for configuration management
+type ConfigHandler struct {
+	configService ConfigManager
+}
+
+// NewConfigHandler creates a new configuration HTTP handler
+func NewConfigHandler(configService ConfigManager) *ConfigHandler {
+	return &ConfigHandler{
+		configService: configService,
+	}
+}
+
+// ServeHTTP implements the http.Handler interface for configuration
+func (h *ConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	method := r.Method
+
+	// Route requests
+	switch {
+	case path == "/config" && method == http.MethodGet:
+		h.handleGetConfig(w, r)
+	case path == "/config" && method == http.MethodPut:
+		h.handleUpdateConfig(w, r)
+	case path == "/config/reload" && method == http.MethodPost:
+		h.handleReloadConfig(w, r)
+	case path == "/config/validate" && method == http.MethodPost:
+		h.handleValidateConfig(w, r)
+	case path == "/config/backup" && method == http.MethodPost:
+		h.handleBackupConfig(w, r)
+	case path == "/config/backups" && method == http.MethodGet:
+		h.handleListBackups(w, r)
+	case strings.HasPrefix(path, "/config/backups/") && method == http.MethodPost:
+		backupID := strings.TrimPrefix(path, "/config/backups/")
+		backupID = strings.TrimSuffix(backupID, "/restore")
+		if strings.HasSuffix(path, "/restore") {
+			h.handleRestoreConfig(w, r, backupID)
+		} else {
+			http.Error(w, "Not found", http.StatusNotFound)
+		}
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
+// handleGetConfig handles GET /config
+func (h *ConfigHandler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.configService.GetConfig()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get configuration")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	response := h.configToResponse(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error().Err(err).Msg("Failed to encode config response")
+	}
+}
+
+// handleUpdateConfig handles PUT /config
+func (h *ConfigHandler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	var req ConfigUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	cfg, err := h.configService.UpdateConfig(req)
+	if err != nil {
+		if strings.Contains(err.Error(), "validation failed") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else {
+			log.Error().Err(err).Msg("Failed to update configuration")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Convert to response format
+	response := h.configToResponse(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error().Err(err).Msg("Failed to encode config update response")
+	}
+}
+
+// handleReloadConfig handles POST /config/reload
+func (h *ConfigHandler) handleReloadConfig(w http.ResponseWriter, r *http.Request) {
+	response, err := h.configService.ReloadConfig()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to reload configuration")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error().Err(err).Msg("Failed to encode config reload response")
+	}
+}
+
+// handleValidateConfig handles POST /config/validate
+func (h *ConfigHandler) handleValidateConfig(w http.ResponseWriter, r *http.Request) {
+	var cfg config.Config
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	response, err := h.configService.ValidateConfig(&cfg)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to validate configuration")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	statusCode := http.StatusOK
+	if !response.Valid {
+		statusCode = http.StatusBadRequest
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error().Err(err).Msg("Failed to encode config validation response")
+	}
+}
+
+// handleBackupConfig handles POST /config/backup
+func (h *ConfigHandler) handleBackupConfig(w http.ResponseWriter, r *http.Request) {
+	backup, err := h.configService.BackupConfig()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to backup configuration")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(backup); err != nil {
+		log.Error().Err(err).Msg("Failed to encode config backup response")
+	}
+}
+
+// handleListBackups handles GET /config/backups
+func (h *ConfigHandler) handleListBackups(w http.ResponseWriter, r *http.Request) {
+	backups, err := h.configService.ListBackups()
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to list configuration backups")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"backups": backups,
+		"total":   len(backups),
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode config backups response")
+	}
+}
+
+// handleRestoreConfig handles POST /config/backups/{id}/restore
+func (h *ConfigHandler) handleRestoreConfig(w http.ResponseWriter, r *http.Request, backupID string) {
+	cfg, err := h.configService.RestoreConfig(backupID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			log.Error().Err(err).Str("backup_id", backupID).Msg("Failed to restore configuration")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Convert to response format
+	response := h.configToResponse(cfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error().Err(err).Msg("Failed to encode config restore response")
+	}
+}
+
+// configToResponse converts config.Config to ConfigResponse
+func (h *ConfigHandler) configToResponse(cfg *config.Config) ConfigResponse {
+	return ConfigResponse{
+		Version:    "1.0", // TODO: Get from config or build info
+		UpdatedAt:  time.Now(),
+		Streams:    cfg.Streams,
+		Global:     cfg.Global,
+		Sources:    make(map[string]interface{}),    // TODO: Populate from config
+		Targets:    make(map[string]interface{}),    // TODO: Populate from config
+		Transform:  nil,                             // TODO: Get from config
+		Monitoring: &cfg.Monitoring,
+	}
+}
+
+// generateBackupID generates a unique backup ID
+func generateBackupID() string {
+	return fmt.Sprintf("backup_%d", time.Now().Unix())
+}

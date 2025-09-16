@@ -1,10 +1,66 @@
 
-# configuration file with password
+# Binaries and builds
+build/dist
+vendor/
+
+# Configuration files with passwords/secrets
 conf/*.conf
 conf/*.conf.json
 
-vendor/
-# dotenv
-build/dist
+# Azure configuration files (security)
+examples/configs/azure/*.yaml
+examples/configs/azure/*.yml
+examples/configs/azure/*.json
+!examples/configs/azure/*.template
+!examples/configs/azure/README.md
+
+# Environment files
 .env
+.env.local
+.env.*.local
+
+# Database files
 *.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Docker volumes and data
+examples/positions/*
+!examples/positions/.gitkeep
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+
+# Go specific
+*.test
+*.out
+*.prof
+
+replicator
+
+# Local temp Tests and files
+deploy/
+tests/
+examples/mongodb/keyfile

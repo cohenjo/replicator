@@ -6,7 +6,6 @@ package estuary
 // we will have here implementations to write an event to an output server as defined in the configuration.
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/cohenjo/replicator/pkg/config"
@@ -14,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type Endpoint interface {
@@ -21,7 +21,7 @@ type Endpoint interface {
 }
 
 func WriteEndpoints(record events.RecordEvent) {
-	fmt.Printf("write to all registered endpoints: %v \n", record)
+	log.Info().Msgf("write to all registered endpoints: %v \n", record)
 }
 
 type EndpointManagment struct {

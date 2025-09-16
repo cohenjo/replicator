@@ -8,7 +8,8 @@ import (
 
 func TestKafkaListen(t *testing.T) {
 
-	config.LoadConfiguration()
+	// Don't call LoadConfiguration() in tests - it hangs waiting for config file
+	// config.LoadConfiguration()
 	// streamer := MySQLStream{}
 	conf := &config.WaterFlowsConfig{
 		Type:       "mysql",

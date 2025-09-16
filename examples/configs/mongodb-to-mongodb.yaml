@@ -1,0 +1,77 @@
+# MongoDB to MongoDB Replication Configuration
+# Using the new Stream + EstuaryBridge architecture
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  metrics_port: 9090
+
+logging:
+  level: "debug"
+  format: "json"
+
+# New streams configuration format - SOURCE AND TARGET
+streams:
+  - name: "mongodb-users-to-mongodb"
+    enabled: true
+    batch_size: 1000
+    buffer_size: 10000
+    
+    # Source configuration (MongoDB)
+    source:
+      type: "mongodb"
+      host: "localhost"
+      port: 27017
+      database: "source_db"
+      username: "admin"
+      password: "password123"
+      options:
+        collection: "users"
+        resume_after: null
+    
+    # Target configuration (MongoDB)
+    target:
+      type: "mongodb"
+      host: "localhost"
+      port: 27018
+      database: "target_db"
+      username: "admin"
+      password: "password123"
+      options:
+        collection: "users"
+
+# EstuaryBridge configuration - TARGETS (not used in this simple config)
+# estuaries:
+#   - name: "mongodb-localhost:27018"
+#     endpoint_type: "MONGO"
+#     host: "localhost"
+#     port: 27018
+#     username: "admin"
+#     password: "password123"
+#     schema: "target_db"
+#     collection: "users"
+
+monitoring:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  health:
+    enabled: true
+    path: "/health"
+  telemetry:
+    enabled: true
+    service_name: "replicator"
+    service_version: "1.0.0"
+    environment: "development"
+    metrics_enabled: true
+    tracing_enabled: true
+    otlp_endpoint: "localhost:4317"
+    metrics_interval: "30s"
+
+# Azure configuration (for future deployment)
+azure:
+  enabled: false
+  
+# Global authentication settings
+authentication:
+  enabled: false

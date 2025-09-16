@@ -1,0 +1,283 @@
+version: '3.8'
+
+services:
+  # Replicator Application
+  replicator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: replicator-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      - REPLICATOR_CONFIG_FILE=/app/config/config.yaml
+      - LOG_LEVEL=info
+    volumes:
+      - ./examples/configs:/app/config:ro
+      - ./examples/positions:/app/positions
+    depends_on:
+      - mongodb-source
+      - mongodb-target
+      - mysql-source
+      - mysql-target
+      - postgresql-source
+      - postgresql-target
+      - elasticsearch
+      - kafka
+      - redis
+    networks:
+      - replicator-network
+
+  # MongoDB Source Database (Single-node Replica Set)
+  mongodb-source:
+    image: mongo:7
+    container_name: replicator-mongodb-source
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: source_db
+    volumes:
+      - mongodb_source_data:/data/db
+      - ./examples/init-scripts/mongo-source-init.js:/docker-entrypoint-initdb.d/init.js:ro
+      - ./examples/mongodb/keyfile:/opt/keyfile:ro
+    command: mongod --replSet src-rs --bind_ip_all --keyFile /opt/keyfile
+    networks:
+      - replicator-network
+
+  # MongoDB Target Database (Single-node Replica Set)
+  mongodb-target:
+    image: mongo:7
+    container_name: replicator-mongodb-target
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: target_db
+    volumes:
+      - mongodb_target_data:/data/db
+      - ./examples/init-scripts/mongo-target-init.js:/docker-entrypoint-initdb.d/init.js:ro
+      - ./examples/mongodb/keyfile:/opt/keyfile:ro
+    command: mongod --replSet tgt-rs --bind_ip_all --keyFile /opt/keyfile
+    networks:
+      - replicator-network
+
+  # MySQL Source Database
+  mysql-source:
+    image: mysql:8.0
+    container_name: replicator-mysql-source
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: source_db
+      MYSQL_USER: replicator
+      MYSQL_PASSWORD: password123
+    volumes:
+      - mysql_source_data:/var/lib/mysql
+      - ./examples/init-scripts/mysql-source-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: --binlog-format=ROW --log-bin=mysql-bin --server-id=1
+    networks:
+      - replicator-network
+
+  # MySQL Target Database
+  mysql-target:
+    image: mysql:8.0
+    container_name: replicator-mysql-target
+    restart: unless-stopped
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: target_db
+      MYSQL_USER: replicator
+      MYSQL_PASSWORD: password123
+    volumes:
+      - mysql_target_data:/var/lib/mysql
+      - ./examples/init-scripts/mysql-target-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - replicator-network
+
+  # PostgreSQL Source Database
+  postgresql-source:
+    image: postgres:15
+    container_name: replicator-postgresql-source
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: source_db
+      POSTGRES_USER: replicator
+      POSTGRES_PASSWORD: password123
+    volumes:
+      - postgresql_source_data:/var/lib/postgresql/data
+      - ./examples/init-scripts/postgresql-source-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: postgres -c wal_level=logical -c max_replication_slots=4 -c max_wal_senders=4
+    networks:
+      - replicator-network
+
+  # PostgreSQL Target Database
+  postgresql-target:
+    image: postgres:15
+    container_name: replicator-postgresql-target
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: target_db
+      POSTGRES_USER: replicator
+      POSTGRES_PASSWORD: password123
+    volumes:
+      - postgresql_target_data:/var/lib/postgresql/data
+      - ./examples/init-scripts/postgresql-target-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - replicator-network
+
+  # Elasticsearch Target
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.0
+    container_name: replicator-elasticsearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - replicator-network
+
+  # Kafka for Event Streaming
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: replicator-zookeeper
+    restart: unless-stopped
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - replicator-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: replicator-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    depends_on:
+      - zookeeper
+    networks:
+      - replicator-network
+
+  # Redis for caching and state management
+  redis:
+    image: redis:7-alpine
+    container_name: replicator-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass password123
+    volumes:
+      - redis_data:/data
+    networks:
+      - replicator-network
+
+  # Monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: replicator-prometheus
+    restart: unless-stopped
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./conf/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - replicator-network
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: replicator-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./examples/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./examples/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - replicator-network
+
+  # OpenTelemetry Collector for OTLP metrics
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: otel-collector
+    restart: unless-stopped
+    volumes:
+      - ./conf/otel-config.yaml:/etc/otelcol/config.yaml
+    ports:
+      - "4317:4317"        # OTLP gRPC receiver
+      - "4318:4318"        # OTLP HTTP (optional)
+      - "8889:8889"        # Prometheus exporter (optional)
+    command: ["--config=/etc/otelcol/config.yaml"]
+    networks:
+      - replicator-network
+
+volumes:
+  mongodb_source_data:
+  mongodb_target_data:
+  mysql_source_data:
+  mysql_target_data:
+  postgresql_source_data:
+  postgresql_target_data:
+  elasticsearch_data:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  replicator-network:
+    driver: bridge

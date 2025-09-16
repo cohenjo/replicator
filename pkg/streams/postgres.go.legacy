@@ -1,0 +1,847 @@
+package streams
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/cohenjo/replicator/pkg/config"
+	"github.com/cohenjo/replicator/pkg/events"
+	"github.com/cohenjo/replicator/pkg/position"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pglogrepl"
+	"github.com/sirupsen/logrus"
+)
+
+// PostgreSQLStreamProvider implements the Stream interface for PostgreSQL logical replication
+type PostgreSQLStreamProvider struct {
+	config          *PostgreSQLConfig
+	conn            *pgconn.PgConn
+	eventSender     chan<- events.RecordEvent
+	stopChannel     chan struct{}
+	logger          *logrus.Logger
+	isRunning       bool
+	lastLSN         uint64
+	pollInterval    time.Duration
+	backoffFactor   float64
+	maxBackoff      time.Duration
+	retryAttempts   int
+	maxRetries      int
+	positionTracker position.Tracker
+	streamID        string
+	slotName        string
+	replicationConn *pgconn.PgConn
+}
+
+// PostgreSQLConfig holds PostgreSQL specific configuration
+type PostgreSQLConfig struct {
+	// PostgreSQL connection settings
+	Host     string `json:"host"`     // PostgreSQL host
+	Port     int    `json:"port"`     // PostgreSQL port
+	Username string `json:"username"` // PostgreSQL username
+	Password string `json:"password"` // PostgreSQL password
+	Database string `json:"database"` // Database name to monitor
+	
+	// Replication settings
+	SlotName         string `json:"slot_name"`          // Logical replication slot name
+	PublicationName  string `json:"publication_name"`   // Publication name
+	StartLSN         string `json:"start_lsn"`          // Starting LSN position
+	PluginName       string `json:"plugin_name"`        // Logical decoding plugin (pgoutput, test_decoding)
+	StatusInterval   time.Duration `json:"status_interval"`   // Status update interval
+	WalSenderTimeout time.Duration `json:"wal_sender_timeout"` // WAL sender timeout
+	
+	// Filtering options
+	IncludeTables     []string `json:"include_tables"`     // Tables to include
+	ExcludeTables     []string `json:"exclude_tables"`     // Tables to exclude
+	IncludeOperations []string `json:"include_operations"` // Operations to include (insert, update, delete)
+	ExcludeOperations []string `json:"exclude_operations"` // Operations to exclude
+	IncludeSchemas    []string `json:"include_schemas"`    // Schemas to include
+	ExcludeSchemas    []string `json:"exclude_schemas"`    // Schemas to exclude
+	
+	// Performance settings
+	MaxRetries       int           `json:"max_retries"`        // Maximum retry attempts
+	RetryDelay       time.Duration `json:"retry_delay"`        // Initial retry delay
+	MaxBackoff       time.Duration `json:"max_backoff"`        // Maximum backoff time
+	ConnTimeout      time.Duration `json:"conn_timeout"`       // Connection timeout
+	MessageTimeout   time.Duration `json:"message_timeout"`    // Message receive timeout
+	ReplicationTimeout time.Duration `json:"replication_timeout"` // Replication connection timeout
+	
+	// SSL settings
+	SSLMode        string `json:"ssl_mode"`          // SSL mode (require, prefer, disable)
+	SSLCert        string `json:"ssl_cert"`          // SSL certificate path
+	SSLKey         string `json:"ssl_key"`           // SSL key path
+	SSLRootCert    string `json:"ssl_root_cert"`     // SSL root certificate path
+	SSLCrl         string `json:"ssl_crl"`           // SSL certificate revocation list
+	
+	// Advanced settings
+	CreateSlot       bool   `json:"create_slot"`        // Create replication slot if not exists
+	DropSlotOnExit   bool   `json:"drop_slot_on_exit"`  // Drop slot when stopping
+	SlotSnapShotAction string `json:"slot_snapshot_action"` // Snapshot action (export, noexport, use)
+	TempSlot         bool   `json:"temp_slot"`          // Create temporary slot
+	
+	// Position tracking settings
+	PositionTracking *position.Config `json:"position_tracking,omitempty"` // Position tracking configuration
+}
+
+// NewPostgreSQLStreamProvider creates a new PostgreSQL stream provider
+func NewPostgreSQLStreamProvider(eventSender chan<- events.RecordEvent, logger *logrus.Logger) *PostgreSQLStreamProvider {
+	return &PostgreSQLStreamProvider{
+		eventSender:   eventSender,
+		logger:        logger,
+		stopChannel:   make(chan struct{}),
+		pollInterval:  1 * time.Second,  // Default poll interval
+		backoffFactor: 2.0,              // Exponential backoff factor
+		maxBackoff:    5 * time.Minute,  // Maximum backoff time
+		maxRetries:    10,               // Default max retries
+		streamID:      fmt.Sprintf("postgresql_%d", time.Now().Unix()),
+	}
+}
+
+// Listen starts listening to PostgreSQL logical replication events
+func (p *PostgreSQLStreamProvider) Listen(ctx context.Context) error {
+	p.logger.Info("Starting PostgreSQL stream provider")
+	
+	// Parse configuration from global config
+	if err := p.parsePostgreSQLConfig(); err != nil {
+		return fmt.Errorf("failed to parse PostgreSQL configuration: %w", err)
+	}
+	
+	// Setup position tracking
+	if err := p.setupPositionTracking(); err != nil {
+		return fmt.Errorf("failed to setup position tracking: %w", err)
+	}
+	defer p.cleanupPositionTracking()
+	
+	// Create database connection for management operations
+	if err := p.setupDatabaseConnection(ctx); err != nil {
+		return fmt.Errorf("failed to setup database connection: %w", err)
+	}
+	defer p.cleanup()
+	
+	// Setup replication slot
+	if err := p.setupReplicationSlot(ctx); err != nil {
+		return fmt.Errorf("failed to setup replication slot: %w", err)
+	}
+	
+	// Create replication connection
+	if err := p.setupReplicationConnection(ctx); err != nil {
+		return fmt.Errorf("failed to setup replication connection: %w", err)
+	}
+	defer p.cleanupReplication()
+	
+	p.isRunning = true
+	p.retryAttempts = 0
+	
+	p.logger.WithFields(logrus.Fields{
+		"host":        p.config.Host,
+		"port":        p.config.Port,
+		"database":    p.config.Database,
+		"slot_name":   p.slotName,
+		"publication": p.config.PublicationName,
+		"start_lsn":   p.lastLSN,
+	}).Info("Connected to PostgreSQL, starting logical replication")
+	
+	// Start logical replication
+	if err := p.startLogicalReplication(ctx); err != nil {
+		return fmt.Errorf("failed to start logical replication: %w", err)
+	}
+	
+	// Start periodic position saves
+	p.schedulePositionSaves(ctx)
+	
+	// Main event processing loop
+	for {
+		select {
+		case <-ctx.Done():
+			p.logger.Info("Context cancelled, stopping PostgreSQL stream provider")
+			return ctx.Err()
+		case <-p.stopChannel:
+			p.logger.Info("Stop signal received, stopping PostgreSQL stream provider")
+			return nil
+		default:
+			// For now, we'll implement a basic polling mechanism
+			// In a complete implementation, we would properly handle the copy data protocol
+			time.Sleep(p.pollInterval)
+			
+			// Create a simple event to show the stream is working
+			eventData := map[string]interface{}{
+				"message": "PostgreSQL logical replication heartbeat",
+				"lsn":     p.lastLSN,
+			}
+			
+			dataBytes, err := json.Marshal(eventData)
+			if err != nil {
+				p.logger.WithError(err).Error("Failed to marshal heartbeat event")
+				continue
+			}
+			
+			recordEvent := events.RecordEvent{
+				Action:     "heartbeat",
+				Schema:     p.config.Database,
+				Collection: "replication",
+				Data:       dataBytes,
+			}
+			
+			// Send heartbeat event
+			select {
+			case p.eventSender <- recordEvent:
+				p.logger.Debug("Sent PostgreSQL replication heartbeat")
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				// Don't block if channel is full
+			}
+		}
+	}
+}
+
+// Stop stops the PostgreSQL stream provider
+func (p *PostgreSQLStreamProvider) Stop() error {
+	p.logger.Info("Stopping PostgreSQL stream provider")
+	
+	if !p.isRunning {
+		return nil
+	}
+	
+	p.isRunning = false
+	close(p.stopChannel)
+	
+	return nil
+}
+
+// GetStreamType returns the stream type identifier
+func (p *PostgreSQLStreamProvider) GetStreamType() string {
+	return "postgresql"
+}
+
+// GetStreamID returns the unique stream identifier
+func (p *PostgreSQLStreamProvider) GetStreamID() string {
+	return p.streamID
+}
+
+// parsePostgreSQLConfig parses PostgreSQL configuration from global config
+func (p *PostgreSQLStreamProvider) parsePostgreSQLConfig() error {
+	globalConfig := config.GetConfig()
+	
+	// Create default config
+	pgConfig := &PostgreSQLConfig{
+		Host:             "localhost",
+		Port:             5432,
+		Database:         "postgres",
+		PluginName:       "pgoutput",
+		StatusInterval:   10 * time.Second,
+		WalSenderTimeout: 60 * time.Second,
+		MaxRetries:       10,
+		RetryDelay:       1 * time.Second,
+		MaxBackoff:       5 * time.Minute,
+		ConnTimeout:      30 * time.Second,
+		MessageTimeout:   5 * time.Second,
+		ReplicationTimeout: 30 * time.Second,
+		SSLMode:          "prefer",
+		CreateSlot:       true,
+		DropSlotOnExit:   false,
+		SlotSnapShotAction: "noexport",
+		TempSlot:         false,
+	}
+	
+	// Override with global config if available
+	if globalConfig.WaterFlowsConfig != nil {
+		wfc := globalConfig.WaterFlowsConfig
+		if wfc.PostgreSQLHost != "" {
+			pgConfig.Host = wfc.PostgreSQLHost
+		}
+		if wfc.PostgreSQLPort != 0 {
+			pgConfig.Port = wfc.PostgreSQLPort
+		}
+		if wfc.PostgreSQLDatabase != "" {
+			pgConfig.Database = wfc.PostgreSQLDatabase
+		}
+		if wfc.PostgreSQLUser != "" {
+			pgConfig.Username = wfc.PostgreSQLUser
+		}
+		if wfc.PostgreSQLPassword != "" {
+			pgConfig.Password = wfc.PostgreSQLPassword
+		}
+		if wfc.PostgreSQLSlotName != "" {
+			pgConfig.SlotName = wfc.PostgreSQLSlotName
+		}
+		if wfc.PostgreSQLPublicationName != "" {
+			pgConfig.PublicationName = wfc.PostgreSQLPublicationName
+		}
+	} else {
+		// Generate default slot name
+		pgConfig.SlotName = fmt.Sprintf("replicator_slot_%d", time.Now().Unix())
+	}
+	if pgConfig.SlotName == "" {
+		pgConfig.SlotName = fmt.Sprintf("replicator_slot_%d", time.Now().Unix())
+	}
+	if pgConfig.PublicationName == "" {
+		pgConfig.PublicationName = "replicator_publication"
+	}
+	
+	// Validate required fields
+	if pgConfig.Host == "" {
+		return fmt.Errorf("PostgreSQL host is required")
+	}
+	if pgConfig.Database == "" {
+		return fmt.Errorf("PostgreSQL database is required")
+	}
+	if pgConfig.Username == "" {
+		return fmt.Errorf("PostgreSQL username is required")
+	}
+	if pgConfig.SlotName == "" {
+		return fmt.Errorf("PostgreSQL slot name is required")
+	}
+	if pgConfig.PublicationName == "" {
+		return fmt.Errorf("PostgreSQL publication name is required")
+	}
+	
+	p.config = pgConfig
+	p.maxRetries = pgConfig.MaxRetries
+	p.maxBackoff = pgConfig.MaxBackoff
+	p.slotName = pgConfig.SlotName
+	
+	p.logger.WithFields(logrus.Fields{
+		"host":        pgConfig.Host,
+		"port":        pgConfig.Port,
+		"database":    pgConfig.Database,
+		"slot_name":   pgConfig.SlotName,
+		"publication": pgConfig.PublicationName,
+		"plugin":      pgConfig.PluginName,
+	}).Debug("Parsed PostgreSQL configuration")
+	
+	return nil
+}
+
+// setupDatabaseConnection creates a standard database connection for management operations
+func (p *PostgreSQLStreamProvider) setupDatabaseConnection(ctx context.Context) error {
+	connStr := p.buildConnectionString(false)
+	
+	var err error
+	p.conn, err = pgconn.Connect(ctx, connStr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+	}
+	
+	p.logger.Debug("Connected to PostgreSQL database")
+	return nil
+}
+
+// setupReplicationConnection creates a replication connection
+func (p *PostgreSQLStreamProvider) setupReplicationConnection(ctx context.Context) error {
+	connStr := p.buildConnectionString(true)
+	
+	var err error
+	p.replicationConn, err = pgconn.Connect(ctx, connStr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to PostgreSQL for replication: %w", err)
+	}
+	
+	p.logger.Debug("Connected to PostgreSQL for replication")
+	return nil
+}
+
+// buildConnectionString builds PostgreSQL connection string
+func (p *PostgreSQLStreamProvider) buildConnectionString(replication bool) string {
+	var parts []string
+	
+	parts = append(parts, fmt.Sprintf("host=%s", p.config.Host))
+	parts = append(parts, fmt.Sprintf("port=%d", p.config.Port))
+	parts = append(parts, fmt.Sprintf("user=%s", p.config.Username))
+	if p.config.Password != "" {
+		parts = append(parts, fmt.Sprintf("password=%s", p.config.Password))
+	}
+	parts = append(parts, fmt.Sprintf("dbname=%s", p.config.Database))
+	parts = append(parts, fmt.Sprintf("sslmode=%s", p.config.SSLMode))
+	
+	if replication {
+		parts = append(parts, "replication=database")
+	}
+	
+	if p.config.SSLCert != "" {
+		parts = append(parts, fmt.Sprintf("sslcert=%s", p.config.SSLCert))
+	}
+	if p.config.SSLKey != "" {
+		parts = append(parts, fmt.Sprintf("sslkey=%s", p.config.SSLKey))
+	}
+	if p.config.SSLRootCert != "" {
+		parts = append(parts, fmt.Sprintf("sslrootcert=%s", p.config.SSLRootCert))
+	}
+	
+	return strings.Join(parts, " ")
+}
+
+// setupReplicationSlot creates or validates the replication slot
+func (p *PostgreSQLStreamProvider) setupReplicationSlot(ctx context.Context) error {
+	// Check if slot exists
+	result := p.conn.Exec(ctx, "SELECT slot_name FROM pg_replication_slots WHERE slot_name = '"+p.slotName+"'")
+	results, err := result.ReadAll()
+	if err != nil {
+		return fmt.Errorf("failed to check replication slot: %w", err)
+	}
+	
+	// Create slot if it doesn't exist and creation is enabled
+	if len(results) == 0 && p.config.CreateSlot {
+		// Use pglogrepl to create the slot
+		options := pglogrepl.CreateReplicationSlotOptions{
+			Temporary: p.config.TempSlot,
+		}
+		
+		_, err := pglogrepl.CreateReplicationSlot(ctx, p.conn, p.slotName, p.config.PluginName, options)
+		if err != nil {
+			return fmt.Errorf("failed to create replication slot: %w", err)
+		}
+		
+		p.logger.WithField("slot_name", p.slotName).Info("Created replication slot")
+	}
+	
+	return nil
+}
+
+// startLogicalReplication starts the logical replication stream
+func (p *PostgreSQLStreamProvider) startLogicalReplication(ctx context.Context) error {
+	var startLSN string
+	if p.lastLSN > 0 {
+		startLSN = position.FormatLSN(p.lastLSN)
+	} else if p.config.StartLSN != "" {
+		startLSN = p.config.StartLSN
+		if lsn, err := position.ParseLSN(startLSN); err == nil {
+			p.lastLSN = lsn
+		}
+	} else {
+		startLSN = "0/0"
+	}
+	
+	// Build replication command using pglogrepl
+	lsn, err := pglogrepl.ParseLSN(startLSN)
+	if err != nil {
+		return fmt.Errorf("failed to parse start LSN: %w", err)
+	}
+	
+	// Start replication using pglogrepl.StartReplication
+	err = pglogrepl.StartReplication(ctx, p.replicationConn, p.slotName, lsn, pglogrepl.StartReplicationOptions{
+		PluginArgs: []string{
+			fmt.Sprintf("publication_names '%s'", p.config.PublicationName),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start logical replication: %w", err)
+	}
+	
+	p.logger.WithFields(logrus.Fields{
+		"slot_name":   p.slotName,
+		"start_lsn":   startLSN,
+		"publication": p.config.PublicationName,
+	}).Info("Started logical replication")
+	
+	return nil
+}
+
+// processReceivedResult processes a received result from the replication connection
+func (p *PostgreSQLStreamProvider) processReceivedResult(ctx context.Context, result *pgconn.Result) error {
+	// Handle different types of results
+	if result.Err != nil {
+		return result.Err
+	}
+	
+	// Create a basic event using the correct RecordEvent structure
+	data := map[string]interface{}{
+		"message":     "PostgreSQL logical replication message",
+		"command_tag": result.CommandTag,
+		"lsn":         p.lastLSN,
+	}
+	
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event data: %w", err)
+	}
+	
+	recordEvent := events.RecordEvent{
+		Action:     "change",
+		Schema:     p.config.Database,
+		Collection: "replication",
+		Data:       dataBytes,
+	}
+	
+	// Send event
+	select {
+	case p.eventSender <- recordEvent:
+		p.logger.WithFields(logrus.Fields{
+			"command_tag": result.CommandTag,
+		}).Debug("Processed PostgreSQL replication result")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	
+	return nil
+}
+
+// processReplicationMessage processes a single replication message (kept for future use)
+func (p *PostgreSQLStreamProvider) processReplicationMessage(ctx context.Context, msg interface{}) error {
+	// This method is kept for future implementation when we can properly
+	// decode pglogrepl messages. For now, we use processReceivedResult
+	return nil
+}
+
+// processWALData processes WAL data messages (placeholder for future implementation)
+func (p *PostgreSQLStreamProvider) processWALData(ctx context.Context, data []byte) error {
+	// Update LSN position (simplified for now)
+	if len(data) >= 8 {
+		// This is a simplified LSN extraction - in practice we'd parse properly
+		p.lastLSN = uint64(len(data)) // Placeholder
+	}
+	
+	// Create a basic event using the correct RecordEvent structure
+	eventData := map[string]interface{}{
+		"lsn":      p.lastLSN,
+		"message":  "PostgreSQL logical replication WAL data",
+		"data_len": len(data),
+	}
+	
+	dataBytes, err := json.Marshal(eventData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal WAL event data: %w", err)
+	}
+	
+	recordEvent := events.RecordEvent{
+		Action:     "change",
+		Schema:     p.config.Database,
+		Collection: "wal_data",
+		Data:       dataBytes,
+	}
+	
+	// Send event
+	select {
+	case p.eventSender <- recordEvent:
+		p.logger.WithFields(logrus.Fields{
+			"lsn":       p.lastLSN,
+			"data_len":  len(data),
+		}).Debug("Processed WAL data message")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	
+	return nil
+}
+
+// sendStandbyStatus sends standby status to PostgreSQL (placeholder for future implementation)
+func (p *PostgreSQLStreamProvider) sendStandbyStatus(ctx context.Context) error {
+	// Placeholder implementation - in practice we'd use proper pglogrepl types
+	p.logger.Debug("Sending standby status update")
+	return nil
+}
+
+// setupPositionTracking initializes position tracking
+func (p *PostgreSQLStreamProvider) setupPositionTracking() error {
+	// Generate stream ID based on connection details
+	p.streamID = fmt.Sprintf("postgresql_%s_%s_%s", p.config.Host, p.config.Database, p.slotName)
+	
+	// Setup position tracking if configured
+	if p.config.PositionTracking != nil {
+		tracker, err := position.NewTracker(p.config.PositionTracking)
+		if err != nil {
+			return fmt.Errorf("failed to create position tracker: %w", err)
+		}
+		
+		p.positionTracker = tracker
+		
+		// Try to load existing position
+		if err := p.loadSavedPosition(); err != nil {
+			p.logger.WithError(err).Warn("Failed to load saved position, starting from configured position")
+		}
+		
+		p.logger.WithFields(logrus.Fields{
+			"stream_id":     p.streamID,
+			"tracker_type":  p.config.PositionTracking.Type,
+		}).Info("Position tracking enabled")
+	} else {
+		// Setup default file-based position tracking
+		defaultConfig := &position.Config{
+			Type:     "file",
+			StreamID: p.streamID,
+			FileConfig: &position.FileConfig{
+				Directory:       "./positions",
+				FilePermissions: 0644,
+				EnableBackup:    true,
+				BackupCount:     5,
+			},
+			UpdateInterval:    30 * time.Second,
+			EnableCompression: false,
+			RetryAttempts:     3,
+			RetryDelay:        1 * time.Second,
+		}
+		
+		tracker, err := position.NewTracker(defaultConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create default position tracker: %w", err)
+		}
+		
+		p.positionTracker = tracker
+		p.config.PositionTracking = defaultConfig
+		
+		// Try to load existing position
+		if err := p.loadSavedPosition(); err != nil {
+			p.logger.WithError(err).Info("No saved position found, starting from configured position")
+		}
+		
+		p.logger.WithField("stream_id", p.streamID).Info("Default file-based position tracking enabled")
+	}
+	
+	return nil
+}
+
+// cleanupPositionTracking cleans up position tracking resources
+func (p *PostgreSQLStreamProvider) cleanupPositionTracking() {
+	if p.positionTracker != nil {
+		// Save final position
+		if err := p.saveCurrentPosition(); err != nil {
+			p.logger.WithError(err).Error("Failed to save final position")
+		}
+		
+		// Close tracker
+		if err := p.positionTracker.Close(); err != nil {
+			p.logger.WithError(err).Error("Failed to close position tracker")
+		}
+	}
+}
+
+// loadSavedPosition loads the last saved position
+func (p *PostgreSQLStreamProvider) loadSavedPosition() error {
+	if p.positionTracker == nil {
+		return fmt.Errorf("position tracker not initialized")
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	savedPos, metadata, err := p.positionTracker.Load(ctx, p.streamID)
+	if err != nil {
+		if err == position.ErrPositionNotFound {
+			return fmt.Errorf("no saved position found")
+		}
+		return fmt.Errorf("failed to load position: %w", err)
+	}
+	
+	// Convert to PostgreSQL position
+	if pgPos, ok := savedPos.(*position.PostgreSQLPosition); ok {
+		p.lastLSN = pgPos.LSN
+		p.config.StartLSN = pgPos.GetLSNString()
+		
+		p.logger.WithFields(logrus.Fields{
+			"lsn":      pgPos.LSN,
+			"lsn_str":  pgPos.GetLSNString(),
+			"metadata": metadata,
+		}).Info("Loaded saved PostgreSQL position")
+		
+		return nil
+	}
+	
+	return fmt.Errorf("invalid position type in saved data")
+}
+
+// saveCurrentPosition saves the current position
+func (p *PostgreSQLStreamProvider) saveCurrentPosition() error {
+	if p.positionTracker == nil {
+		return nil // Position tracking not enabled
+	}
+	
+	// Create PostgreSQL position from current state
+	pgPos := position.NewPostgreSQLPosition(p.lastLSN)
+	pgPos.SetSlotName(p.slotName)
+	pgPos.SetDatabase(p.config.Database)
+	pgPos.SetTimestamp(time.Now().Unix())
+	
+	// Create metadata
+	metadata := map[string]interface{}{
+		"stream_type": "postgresql",
+		"host":        p.config.Host,
+		"port":        p.config.Port,
+		"database":    p.config.Database,
+		"slot_name":   p.slotName,
+		"publication": p.config.PublicationName,
+		"updated_at":  time.Now().Format(time.RFC3339),
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	if err := p.positionTracker.Save(ctx, p.streamID, pgPos, metadata); err != nil {
+		return fmt.Errorf("failed to save position: %w", err)
+	}
+	
+	p.logger.WithFields(logrus.Fields{
+		"lsn":     pgPos.LSN,
+		"lsn_str": pgPos.GetLSNString(),
+	}).Debug("Saved PostgreSQL position")
+	
+	return nil
+}
+
+// schedulePositionSaves starts a goroutine to periodically save positions
+func (p *PostgreSQLStreamProvider) schedulePositionSaves(ctx context.Context) {
+	if p.config.PositionTracking == nil || p.config.PositionTracking.UpdateInterval == 0 {
+		return
+	}
+	
+	ticker := time.NewTicker(p.config.PositionTracking.UpdateInterval)
+	
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := p.saveCurrentPosition(); err != nil {
+					p.logger.WithError(err).Error("Failed to save position during scheduled save")
+				}
+			case <-ctx.Done():
+				return
+			case <-p.stopChannel:
+				return
+			}
+		}
+	}()
+}
+
+// cleanup cleans up resources
+func (p *PostgreSQLStreamProvider) cleanup() {
+	if p.conn != nil {
+		if err := p.conn.Close(context.Background()); err != nil {
+			p.logger.WithError(err).Error("Failed to close database connection")
+		}
+	}
+}
+
+// cleanupReplication cleans up replication resources
+func (p *PostgreSQLStreamProvider) cleanupReplication() {
+	if p.replicationConn != nil {
+		if err := p.replicationConn.Close(context.Background()); err != nil {
+			p.logger.WithError(err).Error("Failed to close replication connection")
+		}
+	}
+	
+	// Drop temporary slot if configured
+	if p.config.DropSlotOnExit && p.conn != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		
+		// Use pglogrepl to drop the slot
+		err := pglogrepl.DropReplicationSlot(ctx, p.conn, p.slotName, pglogrepl.DropReplicationSlotOptions{
+			Wait: true,
+		})
+		if err != nil {
+			p.logger.WithError(err).Warn("Failed to drop replication slot on exit")
+		} else {
+			p.logger.WithField("slot_name", p.slotName).Info("Dropped replication slot")
+		}
+	}
+}
+
+// isFatalError determines if an error is fatal and should stop the stream
+func (p *PostgreSQLStreamProvider) isFatalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errStr := err.Error()
+	
+	// Check for authentication/authorization errors (fatal)
+	fatalKeywords := []string{
+		"authentication failed",
+		"permission denied",
+		"database does not exist",
+		"role does not exist",
+		"replication slot does not exist",
+		"publication does not exist",
+		"connection refused",
+		"server closed the connection",
+	}
+	
+	for _, keyword := range fatalKeywords {
+		if strings.Contains(strings.ToLower(errStr), keyword) {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// shouldFilterTable checks if table should be filtered based on configuration
+func (p *PostgreSQLStreamProvider) shouldFilterTable(schema, table string) bool {
+	fullTableName := fmt.Sprintf("%s.%s", schema, table)
+	
+	// Check schema filters first
+	if len(p.config.IncludeSchemas) > 0 {
+		included := false
+		for _, schemaName := range p.config.IncludeSchemas {
+			if schemaName == schema {
+				included = true
+				break
+			}
+		}
+		if !included {
+			return true
+		}
+	}
+	
+	if len(p.config.ExcludeSchemas) > 0 {
+		for _, schemaName := range p.config.ExcludeSchemas {
+			if schemaName == schema {
+				return true
+			}
+		}
+	}
+	
+	// Check table filters
+	if len(p.config.IncludeTables) > 0 {
+		included := false
+		for _, tableName := range p.config.IncludeTables {
+			if tableName == table || tableName == fullTableName {
+				included = true
+				break
+			}
+		}
+		if !included {
+			return true
+		}
+	}
+	
+	if len(p.config.ExcludeTables) > 0 {
+		for _, tableName := range p.config.ExcludeTables {
+			if tableName == table || tableName == fullTableName {
+				return true
+			}
+		}
+	}
+	
+	return false
+}
+
+// shouldFilterOperation checks if operation should be filtered based on configuration
+func (p *PostgreSQLStreamProvider) shouldFilterOperation(operation string) bool {
+	// Check include filter
+	if len(p.config.IncludeOperations) > 0 {
+		included := false
+		for _, op := range p.config.IncludeOperations {
+			if strings.EqualFold(op, operation) {
+				included = true
+				break
+			}
+		}
+		if !included {
+			return true
+		}
+	}
+	
+	// Check exclude filter
+	if len(p.config.ExcludeOperations) > 0 {
+		for _, op := range p.config.ExcludeOperations {
+			if strings.EqualFold(op, operation) {
+				return true
+			}
+		}
+	}
+	
+	return false
+}

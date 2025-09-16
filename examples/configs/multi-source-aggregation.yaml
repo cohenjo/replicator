@@ -1,0 +1,146 @@
+# Multi-Source Data Aggregation Configuration
+# This demonstrates aggregating data from multiple sources into a single target
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  metrics_port: 9090
+
+logging:
+  level: "info"
+  format: "json"
+
+sources:
+  - name: "mongodb-users"
+    type: "mongodb"
+    connection_string: "mongodb://admin:password123@mongodb-source:27017/source_db?authSource=admin"
+    database: "source_db"
+    collection: "users"
+    change_stream:
+      enabled: true
+      resume_after: null
+    batch_size: 1000
+    timeout: "30s"
+
+  - name: "mysql-orders"
+    type: "mysql"
+    connection_string: "replicator:password123@tcp(mysql-source:3306)/source_db"
+    table: "orders"
+    binlog:
+      enabled: true
+      server_id: 101
+      position_file: "/app/positions/mysql-orders.pos"
+    batch_size: 1000
+    timeout: "30s"
+
+  - name: "postgresql-products"
+    type: "postgresql"
+    connection_string: "postgres://replicator:password123@postgresql-source:5432/source_db?sslmode=disable"
+    table: "products"
+    logical_replication:
+      enabled: true
+      slot_name: "replicator_products_slot"
+      publication_name: "replicator_products_pub"
+    batch_size: 500
+    timeout: "30s"
+
+estuary:
+  - name: "elasticsearch-analytics"
+    type: "elasticsearch"
+    hosts:
+      - "http://elasticsearch:9200"
+    index: "customer-analytics"
+    type_name: "_doc"
+    bulk:
+      size: 200
+      timeout: "15s"
+      workers: 3
+    retry:
+      max_attempts: 5
+      initial_interval: "2s"
+      max_interval: "60s"
+
+streams:
+  - name: "user-profiles"
+    source: "mongodb-users"
+    estuary: "elasticsearch-analytics"
+    transforms:
+      - type: "field-mapping"
+        config:
+          mapping:
+            "user_id": "$.id"
+            "profile_name": "$.name"
+            "email": "$.email"
+            "registration_date": "$.created_at"
+            "document_type": "'user_profile'"
+    error_handling:
+      strategy: "retry"
+      max_retries: 3
+      retry_delay: "5s"
+    position_tracking:
+      enabled: true
+      file_path: "/app/positions/user-profiles.pos"
+
+  - name: "order-events"
+    source: "mysql-orders"
+    estuary: "elasticsearch-analytics"
+    transforms:
+      - type: "field-mapping"
+        config:
+          mapping:
+            "order_id": "$.id"
+            "customer_id": "$.customer_id"
+            "order_amount": "$.total_amount"
+            "order_date": "$.order_date"
+            "order_status": "$.status"
+            "document_type": "'order_event'"
+      - type: "field-enrichment"
+        config:
+          fields:
+            "order_year": "year($.order_date)"
+            "order_month": "month($.order_date)"
+            "amount_tier": |
+              if $.total_amount < 100 then "small"
+              elif $.total_amount < 500 then "medium"
+              else "large"
+              end
+    error_handling:
+      strategy: "retry"
+      max_retries: 3
+      retry_delay: "5s"
+    position_tracking:
+      enabled: true
+      file_path: "/app/positions/order-events.pos"
+
+  - name: "product-catalog"
+    source: "postgresql-products"
+    estuary: "elasticsearch-analytics"
+    transforms:
+      - type: "field-mapping"
+        config:
+          mapping:
+            "product_id": "$.id"
+            "product_name": "$.name"
+            "product_price": "$.price"
+            "category_id": "$.category_id"
+            "last_updated": "$.updated_at"
+            "document_type": "'product_info'"
+    error_handling:
+      strategy: "retry"
+      max_retries: 3
+      retry_delay: "5s"
+    position_tracking:
+      enabled: true
+      file_path: "/app/positions/product-catalog.pos"
+
+monitoring:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  health:
+    enabled: true
+    path: "/health"
+  prometheus:
+    enabled: true
+    namespace: "replicator"
+    subsystem: "multi_source"
