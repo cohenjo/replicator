@@ -1,0 +1,121 @@
+# Azure CosmosDB to Event Hubs Configuration Template
+# Copy this file and replace placeholder values with your Azure resources
+# DO NOT commit this file with real credentials to version control
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  metrics_port: 9090
+
+logging:
+  level: "warn"  # Use warn or error in production
+  format: "json"
+
+# Azure Entra ID Authentication
+authentication:
+  - id: "azure_entra_cosmos"
+    type: "azure_entra"
+    config:
+      tenant_id: "${AZURE_TENANT_ID}"
+      client_id: "${AZURE_CLIENT_ID}"
+      client_secret: "${AZURE_CLIENT_SECRET}"
+      scope: "https://cosmos.azure.com/.default"
+
+  - id: "azure_entra_eventhub"
+    type: "azure_entra"
+    config:
+      tenant_id: "${AZURE_TENANT_ID}"
+      client_id: "${AZURE_CLIENT_ID}"
+      client_secret: "${AZURE_CLIENT_SECRET}"
+      scope: "https://eventhubs.azure.net/.default"
+
+sources:
+  - name: "cosmos-orders"
+    type: "cosmosdb"
+    connection_string: "AccountEndpoint=https://YOUR_COSMOS_ACCOUNT.documents.azure.com:443/;AccountKey=${COSMOS_PRIMARY_KEY};"
+    auth_id: "azure_entra_cosmos"
+    database: "ecommerce"
+    container: "orders"
+    change_feed:
+      enabled: true
+      start_from_beginning: false
+      max_item_count: 100
+    retry_policy:
+      max_attempts: 5
+      initial_delay: "2s"
+      max_delay: "60s"
+      backoff_multiplier: 2.0
+
+estuary:
+  - name: "eventhub-orders"
+    type: "eventhub"
+    connection_string: "Endpoint=sb://YOUR_NAMESPACE.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=${EVENTHUB_KEY}"
+    auth_id: "azure_entra_eventhub"
+    event_hub_name: "orders-stream"
+    partition_key: "customer_id"
+    producer_config:
+      batch_size: 100
+      batch_timeout: "5s"
+      compression: "gzip"
+      max_retries: 3
+
+streams:
+  - name: "cosmos-to-eventhub"
+    source: "cosmos-orders"
+    estuary: "eventhub-orders"
+    transforms:
+      - type: "field-mapping"
+        config:
+          mapping:
+            "order_id": "$.id"
+            "customer_id": "$.customerId"
+            "order_date": "$.orderDate"
+            "total_amount": "$.totalAmount"
+            "status": "$.status"
+            "items": "$.items"
+            "metadata":
+              "source": "cosmos-db"
+              "processed_at": "now()"
+              "partition_key": "$.customerId"
+      - type: "field-validation"
+        config:
+          required_fields: ["order_id", "customer_id", "total_amount"]
+          validation_rules:
+            "total_amount": "$.total_amount > 0"
+            "customer_id": "length($.customer_id) > 0"
+    error_handling:
+      strategy: "dead_letter"
+      dead_letter_queue: "orders-dlq"
+      max_retries: 5
+      retry_delay: "30s"
+    position_tracking:
+      enabled: true
+      storage_type: "azure_blob"
+      storage_config:
+        account_name: "YOUR_STORAGE_ACCOUNT"
+        container_name: "replicator-positions"
+        auth_method: "entra_id"
+
+monitoring:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  health:
+    enabled: true
+    path: "/health"
+  azure_monitor:
+    enabled: true
+    workspace_id: "${AZURE_LOG_ANALYTICS_WORKSPACE_ID}"
+    auth_id: "azure_entra_cosmos"
+  prometheus:
+    enabled: true
+    namespace: "replicator"
+    subsystem: "azure_cosmos"
+
+# Environment Variables Required:
+# AZURE_TENANT_ID=your-azure-tenant-id
+# AZURE_CLIENT_ID=your-service-principal-client-id
+# AZURE_CLIENT_SECRET=your-service-principal-secret
+# COSMOS_PRIMARY_KEY=your-cosmos-db-primary-key
+# EVENTHUB_KEY=your-event-hub-shared-access-key
+# AZURE_LOG_ANALYTICS_WORKSPACE_ID=your-workspace-id

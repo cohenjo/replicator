@@ -8,6 +8,7 @@ import (
 	kazaam "gopkg.in/qntfy/kazaam.v3"
 )
 
+// Legacy TransformationManager for backwards compatibility
 type TransformationManager struct {
 	operations []config.TransformOperation
 	k          *kazaam.Kazaam

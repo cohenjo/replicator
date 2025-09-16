@@ -63,19 +63,19 @@ func (replicator *Replicator) Config() {
 	replicator.quit = make(chan bool)
 
 	// this should be 2 streams with transform in the middle...
-	replicator.eventStream = make(chan *events.RecordEvent, config.Config.StreamQueueLength)
-	replicator.eventEstuary = make(chan *events.RecordEvent, config.Config.EstuaryQueueLength)
+	replicator.eventStream = make(chan *events.RecordEvent, config.Global.StreamQueueLength)
+	replicator.eventEstuary = make(chan *events.RecordEvent, config.Global.EstuaryQueueLength)
 
 	logger.Info().Msg("Configure streams")
 	streams.SetupStreamManager(&replicator.eventStream)
-	for _, streamConfig := range config.Config.Streams {
+	for _, streamConfig := range config.Global.LegacyStreams {
 		streams.StreamManager.NewStream(&streamConfig)
 	}
 
 	//set the endpoints
 	logger.Info().Msg("Configure endpoints")
 	estuary.SetupEndpointManager(&replicator.eventEstuary)
-	for _, estuaryConfig := range config.Config.Estuaries {
+	for _, estuaryConfig := range config.Global.Estuaries {
 		estuary.EndpointManager.NewEstuary(&estuaryConfig)
 
 	}
@@ -83,7 +83,7 @@ func (replicator *Replicator) Config() {
 	// define the transformation.
 	// note we could easily move this inside the endpoints making the configuration even more crazy
 	replicator.transformer = transform.NewTransformer()
-	for _, transformConfig := range config.Config.Transforms {
+	for _, transformConfig := range config.Global.Transforms {
 		replicator.transformer.RegisterOperation(transformConfig)
 	}
 

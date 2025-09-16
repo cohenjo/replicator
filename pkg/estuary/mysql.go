@@ -27,8 +27,8 @@ func NewMySQLEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MySQLEndp
 	endpoint.tableName = streamConfig.Collection
 
 	streamUri := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=true",
-		config.Config.MyDBUser,
-		config.Config.MyDBPasswd,
+		config.Global.MyDBUser,
+		config.Global.MyDBPasswd,
 		streamConfig.Host, streamConfig.Port,
 		streamConfig.Schema,
 	)

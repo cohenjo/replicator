@@ -1,0 +1,365 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Replicator Configuration Schema",
+  "description": "Configuration schema for the database replication service",
+  "type": "object",
+  "required": ["version", "service", "streams"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Configuration schema version",
+      "enum": ["1.0"]
+    },
+    "service": {
+      "$ref": "#/definitions/ServiceConfiguration"
+    },
+    "authentication": {
+      "type": "array",
+      "description": "Authentication provider configurations",
+      "items": {
+        "$ref": "#/definitions/AuthConfiguration"
+      }
+    },
+    "transformations": {
+      "type": "array",
+      "description": "Reusable transformation definitions",
+      "items": {
+        "$ref": "#/definitions/TransformationRule"
+      }
+    },
+    "streams": {
+      "type": "array",
+      "description": "Replication stream definitions",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/StreamConfiguration"
+      }
+    }
+  },
+  "definitions": {
+    "ServiceConfiguration": {
+      "type": "object",
+      "required": ["log_level", "log_format"],
+      "properties": {
+        "log_level": {
+          "type": "string",
+          "description": "Logging verbosity level",
+          "enum": ["debug", "info", "warn", "error"]
+        },
+        "log_format": {
+          "type": "string",
+          "description": "Log output format",
+          "enum": ["json", "text"]
+        },
+        "metrics_port": {
+          "type": "integer",
+          "description": "Port for metrics endpoint",
+          "minimum": 1024,
+          "maximum": 65535,
+          "default": 9090
+        },
+        "health_port": {
+          "type": "integer",
+          "description": "Port for health check endpoint",
+          "minimum": 1024,
+          "maximum": 65535,
+          "default": 8080
+        },
+        "graceful_shutdown_timeout": {
+          "type": "string",
+          "description": "Timeout for graceful shutdown (Go duration format)",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$",
+          "default": "30s"
+        },
+        "max_concurrent_streams": {
+          "type": "integer",
+          "description": "Maximum concurrent stream processing",
+          "minimum": 1,
+          "default": 10
+        }
+      }
+    },
+    "StreamConfiguration": {
+      "type": "object",
+      "required": ["id", "name", "source", "destination", "enabled"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique stream identifier",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable stream name",
+          "minLength": 1
+        },
+        "source": {
+          "$ref": "#/definitions/SourceConfiguration"
+        },
+        "destination": {
+          "$ref": "#/definitions/DestinationConfiguration"
+        },
+        "transformation_id": {
+          "type": "string",
+          "description": "Reference to transformation rule"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether stream is active",
+          "default": true
+        },
+        "batch_size": {
+          "type": "integer",
+          "description": "Number of events to process in batch",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        },
+        "retry_policy": {
+          "$ref": "#/definitions/RetryPolicy"
+        }
+      }
+    },
+    "SourceConfiguration": {
+      "type": "object",
+      "required": ["type", "connection_string", "database"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Database type",
+          "enum": ["mongodb", "mysql", "postgres", "cosmosdb"]
+        },
+        "connection_string": {
+          "type": "string",
+          "description": "Database connection details",
+          "minLength": 1
+        },
+        "auth_id": {
+          "type": "string",
+          "description": "Reference to authentication configuration"
+        },
+        "database": {
+          "type": "string",
+          "description": "Database name to monitor",
+          "minLength": 1
+        },
+        "collection_table": {
+          "type": "string",
+          "description": "Specific collection/table filter"
+        },
+        "change_stream_options": {
+          "type": "object",
+          "description": "Database-specific options",
+          "additionalProperties": true
+        }
+      }
+    },
+    "DestinationConfiguration": {
+      "type": "object",
+      "required": ["type", "connection_string", "database"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Database type",
+          "enum": ["mongodb", "mysql", "postgres", "cosmosdb"]
+        },
+        "connection_string": {
+          "type": "string",
+          "description": "Database connection details",
+          "minLength": 1
+        },
+        "auth_id": {
+          "type": "string",
+          "description": "Reference to authentication configuration"
+        },
+        "database": {
+          "type": "string",
+          "description": "Target database name",
+          "minLength": 1
+        },
+        "collection_table": {
+          "type": "string",
+          "description": "Target collection/table name"
+        },
+        "write_options": {
+          "type": "object",
+          "description": "Database-specific write options",
+          "additionalProperties": true
+        }
+      }
+    },
+    "AuthConfiguration": {
+      "type": "object",
+      "required": ["id", "type", "config"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique authentication identifier",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$"
+        },
+        "type": {
+          "type": "string",
+          "description": "Authentication type",
+          "enum": ["azure_entra", "username_password", "certificate"]
+        },
+        "config": {
+          "type": "object",
+          "description": "Type-specific authentication parameters",
+          "oneOf": [
+            {
+              "if": { "properties": { "type": { "const": "azure_entra" } } },
+              "then": {
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": ["tenant_id", "client_id"],
+                    "properties": {
+                      "tenant_id": {
+                        "type": "string",
+                        "description": "Azure tenant ID"
+                      },
+                      "client_id": {
+                        "type": "string",
+                        "description": "Azure client ID"
+                      },
+                      "client_secret": {
+                        "type": "string",
+                        "description": "Azure client secret"
+                      },
+                      "scope": {
+                        "type": "string",
+                        "description": "Authentication scope",
+                        "default": "https://database.windows.net/.default"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": { "properties": { "type": { "const": "username_password" } } },
+              "then": {
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "required": ["username", "password"],
+                    "properties": {
+                      "username": {
+                        "type": "string",
+                        "description": "Database username"
+                      },
+                      "password": {
+                        "type": "string",
+                        "description": "Database password"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "TransformationRule": {
+      "type": "object",
+      "required": ["id", "name", "type", "specification"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique transformation identifier",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable transformation name",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "description": "Transformation engine type",
+          "enum": ["kazaam", "custom"]
+        },
+        "specification": {
+          "type": "object",
+          "description": "Transformation logic definition",
+          "additionalProperties": true
+        },
+        "error_handling": {
+          "$ref": "#/definitions/ErrorHandling"
+        }
+      }
+    },
+    "RetryPolicy": {
+      "type": "object",
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "description": "Maximum retry attempts",
+          "minimum": 1,
+          "default": 3
+        },
+        "initial_delay": {
+          "type": "string",
+          "description": "Initial retry delay (Go duration format)",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$",
+          "default": "1s"
+        },
+        "max_delay": {
+          "type": "string",
+          "description": "Maximum retry delay (Go duration format)",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$",
+          "default": "30s"
+        },
+        "backoff_multiplier": {
+          "type": "number",
+          "description": "Exponential backoff multiplier",
+          "minimum": 1.0,
+          "default": 2.0
+        },
+        "permanent_error_codes": {
+          "type": "array",
+          "description": "Error codes that skip retry",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ErrorHandling": {
+      "type": "object",
+      "properties": {
+        "on_error": {
+          "type": "string",
+          "description": "Action on error",
+          "enum": ["skip", "retry", "fail_stream", "dead_letter"],
+          "default": "retry"
+        },
+        "dead_letter_destination": {
+          "type": "string",
+          "description": "Where to send failed events"
+        },
+        "max_retries": {
+          "type": "integer",
+          "description": "Maximum transformation retry attempts",
+          "minimum": 0,
+          "default": 3
+        },
+        "retry_delay": {
+          "type": "string",
+          "description": "Delay between transformation retries (Go duration format)",
+          "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$",
+          "default": "5s"
+        }
+      },
+      "if": {
+        "properties": {
+          "on_error": { "const": "dead_letter" }
+        }
+      },
+      "then": {
+        "required": ["dead_letter_destination"]
+      }
+    }
+  }
+}

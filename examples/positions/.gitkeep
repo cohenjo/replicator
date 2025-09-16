@@ -1,0 +1,3 @@
+# This directory stores position tracking files for local development
+# In production, position data should be stored in persistent, replicated storage
+# such as Azure Blob Storage, AWS S3, or a database

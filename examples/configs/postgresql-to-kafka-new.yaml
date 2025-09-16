@@ -1,0 +1,112 @@
+# PostgreSQL to Kafka Streaming Configuration (Updated for New Stream System)
+# This demonstrates change data capture from PostgreSQL to Kafka topics
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  metrics_port: 9090
+
+logging:
+  level: "info"
+  format: "json"
+
+# New streams configuration format
+streams:
+  - name: "postgresql-orders-to-kafka"
+    enabled: true
+    batch_size: 500
+    buffer_size: 5000
+    
+    # Source configuration (PostgreSQL)
+    source:
+      type: "postgresql"
+      host: "postgresql-source"
+      port: 5432
+      database: "source_db"
+      username: "replicator"
+      password: "password123"
+      options:
+        table: "orders"
+        slot_name: "replicator_orders_slot"
+        publication: "replicator_orders_pub"
+        use_tls: false
+    
+    # Target configuration (Kafka)
+    target:
+      type: "kafka"
+      host: "kafka"
+      port: 9092
+      options:
+        topics: ["orders-stream"]
+        consumer_group: "replicator-orders-group"
+        partition_key: "customer_id"
+        acks: "all"
+        compression_type: "snappy"
+        batch_size: 16384
+        linger_ms: 5
+        retries: 2147483647
+        enable_idempotence: true
+        key_format: "string"
+        value_format: "json"
+        use_tls: false
+    
+    # Optional transformation rules
+    transformation:
+      enabled: true
+      engine: "kazaam"
+      rules:
+        - name: "change-event-envelope"
+          enabled: true
+          priority: 1
+          actions:
+            - type: "debezium_format"
+              spec: |
+                {
+                  "before": "$.before",
+                  "after": "$.after",
+                  "op": "$.operation",
+                  "ts_ms": "$.timestamp",
+                  "source": {
+                    "db": "source_db",
+                    "table": "orders",
+                    "connector": "replicator"
+                  }
+                }
+        
+        - name: "metadata-enrichment"
+          enabled: true
+          priority: 2
+          actions:
+            - type: "add_metadata"
+              spec: |
+                {
+                  "event_id": "uuid()",
+                  "processed_at": "now()",
+                  "stream_name": "postgresql-orders-to-kafka"
+                }
+      
+      error_handling:
+        strategy: "retry"
+        max_retries: 10
+        retry_delay: "2s"
+        log_errors: true
+
+monitoring:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  health:
+    enabled: true
+    path: "/health"
+  prometheus:
+    enabled: true
+    namespace: "replicator"
+    subsystem: "postgresql_kafka"
+
+# Azure configuration (for future deployment)
+azure:
+  enabled: false
+  
+# Global authentication settings
+authentication:
+  enabled: false

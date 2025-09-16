@@ -1,0 +1,52 @@
+# PostgreSQL to Kafka Streaming Configuration (Updated for New Stream System)
+# This demonstrates change data capture from PostgreSQL
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  metrics_port: 9090
+
+logging:
+  level: "info"
+  format: "json"
+
+# New streams configuration format - SOURCE ONLY
+streams:
+  - name: "postgresql-orders-stream"
+    enabled: true
+    batch_size: 500
+    buffer_size: 5000
+    
+    # Source configuration (PostgreSQL)
+    source:
+      type: "postgresql"
+      host: "postgresql-source"
+      port: 5432
+      database: "source_db"
+      username: "replicator"
+      password: "password123"
+      options:
+        table: "orders"
+        slot_name: "replicator_orders_slot"
+        publication: "replicator_orders_pub"
+        use_tls: false
+
+monitoring:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  health:
+    enabled: true
+    path: "/health"
+  prometheus:
+    enabled: true
+    namespace: "replicator"
+    subsystem: "postgresql_kafka"
+
+# Azure configuration (for future deployment)
+azure:
+  enabled: false
+  
+# Global authentication settings
+authentication:
+  enabled: false

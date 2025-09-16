@@ -1,0 +1,912 @@
+package streams
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/cohenjo/replicator/pkg/config"
+	"github.com/cohenjo/replicator/pkg/events"
+	"github.com/cohenjo/replicator/pkg/position"
+	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/replication"
+	"github.com/go-mysql-org/go-mysql/schema"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/sirupsen/logrus"
+)
+
+// MySQLStreamProvider implements the Stream interface for MySQL binlog streaming
+type MySQLStreamProvider struct {
+	config         *MySQLConfig
+	syncer         *replication.BinlogSyncer
+	eventSender    chan<- events.RecordEvent
+	stopChannel    chan struct{}
+	logger         *logrus.Logger
+	isRunning      bool
+	lastPosition   mysql.Position
+	pollInterval   time.Duration
+	backoffFactor  float64
+	maxBackoff     time.Duration
+	retryAttempts  int
+	maxRetries     int
+	tableSchemas   map[string]*schema.Table
+	positionTracker position.Tracker
+	streamID       string
+}
+
+// MySQLConfig holds MySQL specific configuration
+type MySQLConfig struct {
+	// MySQL connection settings
+	Host     string `json:"host"`     // MySQL host
+	Port     int    `json:"port"`     // MySQL port
+	Username string `json:"username"` // MySQL username
+	Password string `json:"password"` // MySQL password
+	Database string `json:"database"` // Database name to monitor
+	
+	// Binlog settings
+	ServerID         uint32 `json:"server_id"`         // MySQL server ID for replication
+	BinlogFormat     string `json:"binlog_format"`     // ROW, STATEMENT, MIXED
+	BinlogPosition   string `json:"binlog_position"`   // Starting binlog position
+	BinlogFile       string `json:"binlog_file"`       // Starting binlog file
+	HeartbeatPeriod  time.Duration `json:"heartbeat_period"`  // Heartbeat interval
+	ReadTimeout      time.Duration `json:"read_timeout"`      // Read timeout
+	
+	// Filtering options
+	IncludeTables    []string `json:"include_tables"`    // Tables to include
+	ExcludeTables    []string `json:"exclude_tables"`    // Tables to exclude
+	IncludeOperations []string `json:"include_operations"` // Operations to include (insert, update, delete)
+	ExcludeOperations []string `json:"exclude_operations"` // Operations to exclude
+	
+	// Performance settings
+	MaxRetries    int           `json:"max_retries"`     // Maximum retry attempts
+	RetryDelay    time.Duration `json:"retry_delay"`     // Initial retry delay
+	MaxBackoff    time.Duration `json:"max_backoff"`     // Maximum backoff time
+	ConnTimeout   time.Duration `json:"conn_timeout"`    // Connection timeout
+	
+	// SSL settings
+	UseSSL         bool   `json:"use_ssl"`           // Enable SSL
+	SSLCert        string `json:"ssl_cert"`          // SSL certificate path
+	SSLKey         string `json:"ssl_key"`           // SSL key path
+	SSLCa          string `json:"ssl_ca"`            // SSL CA path
+	SSLMode        string `json:"ssl_mode"`          // SSL mode (required, preferred, disabled)
+	SkipSSLVerify  bool   `json:"skip_ssl_verify"`   // Skip SSL verification
+	
+	// Position tracking settings
+	PositionTracking *position.Config `json:"position_tracking,omitempty"` // Position tracking configuration
+}
+
+// NewMySQLStreamProvider creates a new MySQL stream provider
+func NewMySQLStreamProvider(eventSender chan<- events.RecordEvent, logger *logrus.Logger) *MySQLStreamProvider {
+	return &MySQLStreamProvider{
+		eventSender:   eventSender,
+		logger:        logger,
+		stopChannel:   make(chan struct{}),
+		pollInterval:  1 * time.Second,  // Default poll interval
+		backoffFactor: 2.0,              // Exponential backoff factor
+		maxBackoff:    5 * time.Minute,  // Maximum backoff time
+		maxRetries:    10,               // Default max retries
+		tableSchemas:  make(map[string]*schema.Table),
+	}
+}
+
+// Listen starts listening to MySQL binlog events
+func (m *MySQLStreamProvider) Listen(ctx context.Context) error {
+	m.logger.Info("Starting MySQL stream provider")
+	
+	// Parse configuration from global config
+	if err := m.parseMySQLConfig(); err != nil {
+		return fmt.Errorf("failed to parse MySQL configuration: %w", err)
+	}
+	
+	// Setup position tracking
+	if err := m.setupPositionTracking(); err != nil {
+		return fmt.Errorf("failed to setup position tracking: %w", err)
+	}
+	defer m.cleanupPositionTracking()
+	
+	// Create and configure binlog syncer
+	if err := m.setupBinlogSyncer(); err != nil {
+		return fmt.Errorf("failed to setup MySQL binlog syncer: %w", err)
+	}
+	
+	defer m.cleanup()
+	
+	m.isRunning = true
+	m.retryAttempts = 0
+	currentBackoff := m.config.RetryDelay
+	
+	m.logger.WithFields(logrus.Fields{
+		"host":     m.config.Host,
+		"port":     m.config.Port,
+		"database": m.config.Database,
+		"server_id": m.config.ServerID,
+	}).Info("Connected to MySQL, starting binlog monitoring")
+	
+	// Start binlog streaming
+	streamer, err := m.startBinlogStreaming()
+	if err != nil {
+		return fmt.Errorf("failed to start binlog streaming: %w", err)
+	}
+	defer func() {
+		if streamer != nil {
+			// Close method is not public in this version, let it be garbage collected
+			streamer = nil
+		}
+	}()
+	
+	// Start periodic position saves
+	m.schedulePositionSaves(ctx)
+	
+	// Main event processing loop
+	for {
+		select {
+		case <-ctx.Done():
+			m.logger.Info("Context cancelled, stopping MySQL stream provider")
+			return ctx.Err()
+		case <-m.stopChannel:
+			m.logger.Info("Stop signal received, stopping MySQL stream provider")
+			return nil
+		default:
+			// Get next binlog event with timeout
+			ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+			ev, err := streamer.GetEvent(ctxTimeout)
+			cancel()
+			
+			if err != nil {
+				if err == context.DeadlineExceeded {
+					// Timeout is normal, continue
+					continue
+				}
+				
+				if m.isFatalError(err) {
+					m.logger.WithError(err).Error("Fatal error in MySQL binlog streaming")
+					return err
+				}
+				
+				// Handle retryable errors with exponential backoff
+				m.retryAttempts++
+				if m.retryAttempts > m.maxRetries {
+					m.logger.WithError(err).Error("Maximum retry attempts exceeded")
+					return fmt.Errorf("maximum retry attempts exceeded: %w", err)
+				}
+				
+				m.logger.WithFields(logrus.Fields{
+					"error": err.Error(),
+					"retry_attempt": m.retryAttempts,
+					"backoff_duration": currentBackoff,
+				}).Warn("Error in binlog streaming, retrying with backoff")
+				
+				// Wait with exponential backoff before restarting
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(currentBackoff):
+					currentBackoff = time.Duration(float64(currentBackoff) * m.backoffFactor)
+					if currentBackoff > m.maxBackoff {
+						currentBackoff = m.maxBackoff
+					}
+					
+					// Close and restart streaming
+					if streamer != nil {
+						// Note: Close method is not public, let it be garbage collected
+						streamer = nil
+					}
+					streamer, err = m.startBinlogStreaming()
+					if err != nil {
+						m.logger.WithError(err).Error("Failed to restart binlog streaming")
+						continue
+					}
+				}
+				continue
+			}
+			
+			// Reset retry counters on successful operation
+			m.retryAttempts = 0
+			currentBackoff = m.config.RetryDelay
+			
+			// Process the event
+			if err := m.processEvent(ev); err != nil {
+				m.logger.WithError(err).Warn("Failed to process binlog event")
+				// Continue processing other events
+			}
+		}
+	}
+}
+
+// parseMySQLConfig parses MySQL configuration from global config
+func (m *MySQLStreamProvider) parseMySQLConfig() error {
+	globalConfig := config.GetConfig()
+	if globalConfig == nil {
+		return fmt.Errorf("global configuration not available")
+	}
+	
+	// Extract MySQL configuration from global config
+	mysqlConfig := &MySQLConfig{
+		Port:           3306,                    // Default MySQL port
+		ServerID:       1001,                   // Default server ID
+		BinlogFormat:   "ROW",                  // Default binlog format
+		HeartbeatPeriod: 30 * time.Second,     // Default heartbeat
+		ReadTimeout:    90 * time.Second,      // Default read timeout
+		MaxRetries:     10,                    // Default max retries
+		RetryDelay:     1 * time.Second,       // Default retry delay
+		MaxBackoff:     5 * time.Minute,       // Default max backoff
+		ConnTimeout:    30 * time.Second,      // Default connection timeout
+		UseSSL:         false,                 // Default SSL disabled
+		SSLMode:        "preferred",           // Default SSL mode
+	}
+	
+	// Parse from WaterFlowsConfig if available
+	if wfc := globalConfig.WaterFlowsConfig; wfc != nil {
+		if wfc.Host != "" {
+			mysqlConfig.Host = wfc.Host
+		}
+		if wfc.Port > 0 {
+			mysqlConfig.Port = wfc.Port
+		}
+		if wfc.Schema != "" {
+			mysqlConfig.Database = wfc.Schema
+		}
+		
+		// Parse MySQL-specific fields if they exist in the config
+		if wfc.Type == "mysql" && len(wfc.MySQLIncludeTables) > 0 {
+			mysqlConfig.IncludeTables = wfc.MySQLIncludeTables
+		}
+		if wfc.Type == "mysql" && len(wfc.MySQLExcludeTables) > 0 {
+			mysqlConfig.ExcludeTables = wfc.MySQLExcludeTables
+		}
+		if wfc.Type == "mysql" && len(wfc.MySQLIncludeOperations) > 0 {
+			mysqlConfig.IncludeOperations = wfc.MySQLIncludeOperations
+		}
+		if wfc.Type == "mysql" && len(wfc.MySQLExcludeOperations) > 0 {
+			mysqlConfig.ExcludeOperations = wfc.MySQLExcludeOperations
+		}
+		if wfc.Type == "mysql" && wfc.MySQLServerID > 0 {
+			mysqlConfig.ServerID = wfc.MySQLServerID
+		}
+		if wfc.Type == "mysql" && wfc.MySQLBinlogFile != "" {
+			mysqlConfig.BinlogFile = wfc.MySQLBinlogFile
+		}
+		if wfc.Type == "mysql" && wfc.MySQLBinlogPosition != "" {
+			mysqlConfig.BinlogPosition = wfc.MySQLBinlogPosition
+		}
+		if wfc.Type == "mysql" && wfc.MySQLHeartbeatPeriod > 0 {
+			mysqlConfig.HeartbeatPeriod = time.Duration(wfc.MySQLHeartbeatPeriod) * time.Second
+		}
+		if wfc.Type == "mysql" && wfc.MySQLReadTimeout > 0 {
+			mysqlConfig.ReadTimeout = time.Duration(wfc.MySQLReadTimeout) * time.Second
+		}
+		if wfc.Type == "mysql" && wfc.MySQLMaxRetries > 0 {
+			mysqlConfig.MaxRetries = wfc.MySQLMaxRetries
+		}
+		if wfc.Type == "mysql" && wfc.MySQLRetryDelay > 0 {
+			mysqlConfig.RetryDelay = time.Duration(wfc.MySQLRetryDelay) * time.Second
+		}
+		if wfc.Type == "mysql" && wfc.MySQLMaxBackoff > 0 {
+			mysqlConfig.MaxBackoff = time.Duration(wfc.MySQLMaxBackoff) * time.Second
+		}
+		if wfc.Type == "mysql" && wfc.MySQLConnTimeout > 0 {
+			mysqlConfig.ConnTimeout = time.Duration(wfc.MySQLConnTimeout) * time.Second
+		}
+		if wfc.Type == "mysql" {
+			mysqlConfig.UseSSL = wfc.MySQLUseSSL
+			mysqlConfig.SSLCert = wfc.MySQLSSLCert
+			mysqlConfig.SSLKey = wfc.MySQLSSLKey
+			mysqlConfig.SSLCa = wfc.MySQLSSLCa
+			mysqlConfig.SSLMode = wfc.MySQLSSLMode
+			mysqlConfig.SkipSSLVerify = wfc.MySQLSkipSSLVerify
+		}
+	}
+	
+	// Get credentials from global config
+	if globalConfig.MyDBUser != "" {
+		mysqlConfig.Username = globalConfig.MyDBUser
+	}
+	if globalConfig.MyDBPasswd != "" {
+		mysqlConfig.Password = globalConfig.MyDBPasswd
+	}
+	
+	// Validate required fields
+	if mysqlConfig.Host == "" {
+		return fmt.Errorf("MySQL host is required")
+	}
+	if mysqlConfig.Database == "" {
+		return fmt.Errorf("MySQL database is required")
+	}
+	if mysqlConfig.Username == "" {
+		return fmt.Errorf("MySQL username is required")
+	}
+	
+	m.config = mysqlConfig
+	m.maxRetries = mysqlConfig.MaxRetries
+	m.maxBackoff = mysqlConfig.MaxBackoff
+	
+	m.logger.WithFields(logrus.Fields{
+		"host":     mysqlConfig.Host,
+		"port":     mysqlConfig.Port,
+		"database": mysqlConfig.Database,
+		"server_id": mysqlConfig.ServerID,
+		"binlog_format": mysqlConfig.BinlogFormat,
+	}).Debug("Parsed MySQL configuration")
+	
+	return nil
+}
+
+// setupBinlogSyncer creates and configures the binlog syncer
+func (m *MySQLStreamProvider) setupBinlogSyncer() error {
+	// Create binlog syncer configuration
+	cfg := replication.BinlogSyncerConfig{
+		ServerID: m.config.ServerID,
+		Flavor:   "mysql",
+		Host:     m.config.Host,
+		Port:     uint16(m.config.Port),
+		User:     m.config.Username,
+		Password: m.config.Password,
+		Charset:  "utf8mb4",
+	}
+	
+	// Configure timeouts
+	cfg.ReadTimeout = m.config.ReadTimeout
+	cfg.HeartbeatPeriod = m.config.HeartbeatPeriod
+	
+	// Create syncer instance
+	m.syncer = replication.NewBinlogSyncer(cfg)
+	
+	return nil
+}
+
+// startBinlogStreaming starts the binlog streaming
+func (m *MySQLStreamProvider) startBinlogStreaming() (*replication.BinlogStreamer, error) {
+	var streamer *replication.BinlogStreamer
+	var err error
+	
+	// Start from specific position if configured
+	if m.config.BinlogFile != "" && m.config.BinlogPosition != "" {
+		pos, err := strconv.ParseUint(m.config.BinlogPosition, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid binlog position: %w", err)
+		}
+		
+		startPos := mysql.Position{
+			Name: m.config.BinlogFile,
+			Pos:  uint32(pos),
+		}
+		
+		streamer, err = m.syncer.StartSync(startPos)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start binlog sync from position: %w", err)
+		}
+		
+		m.lastPosition = startPos
+		m.logger.WithFields(logrus.Fields{
+			"file": startPos.Name,
+			"pos":  startPos.Pos,
+		}).Info("Started binlog streaming from specific position")
+	} else {
+		// Start from current master position
+		streamer, err = m.syncer.StartSyncGTID(nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start binlog sync from GTID: %w", err)
+		}
+		
+		m.logger.Info("Started binlog streaming from current master position")
+	}
+	
+	return streamer, nil
+}
+
+// processEvent processes a single binlog event
+func (m *MySQLStreamProvider) processEvent(ev *replication.BinlogEvent) error {
+	// Update position - convert uint32 to Position structure
+	m.lastPosition = mysql.Position{
+		Name: m.lastPosition.Name, // Keep current file name
+		Pos:  ev.Header.LogPos,
+	}
+	
+	switch e := ev.Event.(type) {
+	case *replication.RotateEvent:
+		m.logger.WithFields(logrus.Fields{
+			"next_log_name": string(e.NextLogName),
+			"position":      e.Position,
+		}).Debug("Binlog rotated")
+		
+		m.lastPosition = mysql.Position{
+			Name: string(e.NextLogName),
+			Pos:  uint32(e.Position),
+		}
+		
+		// Save position on rotation for safety
+		if err := m.saveCurrentPosition(); err != nil {
+			m.logger.WithError(err).Warn("Failed to save position after rotation")
+		}
+		
+	case *replication.RowsEvent:
+		return m.handleRowsEvent(e, ev.Header)
+		
+	case *replication.QueryEvent:
+		m.logger.WithFields(logrus.Fields{
+			"schema": string(e.Schema),
+			"query":  string(e.Query),
+		}).Debug("DDL event received")
+		
+		// Invalidate cached table schema for the affected database
+		schema := string(e.Schema)
+		for key := range m.tableSchemas {
+			if strings.HasPrefix(key, schema+".") {
+				delete(m.tableSchemas, key)
+			}
+		}
+		
+	default:
+		// Log other event types at trace level
+		m.logger.WithFields(logrus.Fields{
+			"event_type": ev.Header.EventType,
+		}).Trace("Received binlog event")
+	}
+	
+	return nil
+}
+
+// handleRowsEvent processes row change events
+func (m *MySQLStreamProvider) handleRowsEvent(e *replication.RowsEvent, header *replication.EventHeader) error {
+	// Get schema and table names
+	schemaName := string(e.Table.Schema)
+	tableName := string(e.Table.Table)
+	
+	// Check if table should be filtered
+	if m.shouldFilterTable(schemaName, tableName) {
+		return nil
+	}
+	
+	// Determine operation type
+	var operationType string
+	switch header.EventType {
+	case replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
+		operationType = "insert"
+	case replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
+		operationType = "update"
+	case replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
+		operationType = "delete"
+	default:
+		m.logger.WithFields(logrus.Fields{
+			"event_type": header.EventType,
+		}).Debug("Unknown rows event type, skipping")
+		return nil
+	}
+	
+	// Check if operation should be filtered
+	if m.shouldFilterOperation(operationType) {
+		return nil
+	}
+	
+	// Get table schema
+	tableSchema, err := m.getTableSchema(schemaName, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get table schema for %s.%s: %w", schemaName, tableName, err)
+	}
+	
+	// Process each row in the event
+	for i, row := range e.Rows {
+		if err := m.processRowData(e, tableSchema, row, i, operationType); err != nil {
+			m.logger.WithError(err).Error("Failed to process row data")
+			// Continue processing other rows
+		}
+	}
+	
+	return nil
+}
+
+// processRowData processes a single row change
+func (m *MySQLStreamProvider) processRowData(e *replication.RowsEvent, tableSchema *schema.Table, row []interface{}, rowIndex int, operationType string) error {
+	schemaName := string(e.Table.Schema)
+	tableName := string(e.Table.Table)
+	
+	// Create row data map
+	rowData := make(map[string]interface{})
+	
+	// Map column values to column names
+	for i, col := range tableSchema.Columns {
+		if i < len(row) && row[i] != nil {
+			rowData[col.Name] = row[i]
+		}
+	}
+	
+	// Marshal row data to JSON
+	rowBytes, err := json.Marshal(rowData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal row data: %w", err)
+	}
+	
+	// Create record event
+	recordEvent := events.RecordEvent{
+		Action:     operationType,
+		Schema:     schemaName,
+		Collection: tableName,
+		Data:       rowBytes,
+	}
+	
+	// For updates, include old data
+	if operationType == "update" {
+		// For update events, rows come in pairs (old, new)
+		if rowIndex%2 == 0 && rowIndex+1 < len(e.Rows) {
+			// This is the old row, next one is the new row
+			oldRow := row
+			oldRowData := make(map[string]interface{})
+			
+			for i, col := range tableSchema.Columns {
+				if i < len(oldRow) && oldRow[i] != nil {
+					oldRowData[col.Name] = oldRow[i]
+				}
+			}
+			
+			oldRowBytes, err := json.Marshal(oldRowData)
+			if err != nil {
+				return fmt.Errorf("failed to marshal old row data: %w", err)
+			}
+			
+			recordEvent.OldData = oldRowBytes
+		}
+	}
+	
+	// Send event
+	select {
+	case m.eventSender <- recordEvent:
+		m.logger.WithFields(logrus.Fields{
+			"action":     recordEvent.Action,
+			"schema":     recordEvent.Schema,
+			"collection": recordEvent.Collection,
+			"position":   m.lastPosition.String(),
+		}).Debug("Sent MySQL change event")
+	default:
+		m.logger.Warn("Event channel is full, dropping change event")
+	}
+	
+	return nil
+}
+
+// getTableSchema retrieves and caches table schema
+func (m *MySQLStreamProvider) getTableSchema(schemaName, tableName string) (*schema.Table, error) {
+	key := fmt.Sprintf("%s.%s", schemaName, tableName)
+	
+	// Check cache first
+	if tableSchema, exists := m.tableSchemas[key]; exists {
+		return tableSchema, nil
+	}
+	
+	// Connect to database to get schema
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?interpolateParams=true",
+		m.config.Username,
+		m.config.Password,
+		m.config.Host,
+		m.config.Port,
+		schemaName,
+	)
+	
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to MySQL: %w", err)
+	}
+	defer db.Close()
+	
+	// Get table schema
+	tableSchema, err := schema.NewTableFromSqlDB(db, schemaName, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get table schema: %w", err)
+	}
+	
+	// Cache the schema
+	m.tableSchemas[key] = tableSchema
+	
+	m.logger.WithFields(logrus.Fields{
+		"schema": schemaName,
+		"table":  tableName,
+		"columns": len(tableSchema.Columns),
+	}).Debug("Cached table schema")
+	
+	return tableSchema, nil
+}
+
+// shouldFilterTable checks if table should be filtered based on configuration
+func (m *MySQLStreamProvider) shouldFilterTable(schema, table string) bool {
+	fullTableName := fmt.Sprintf("%s.%s", schema, table)
+	
+	// Check include filter
+	if len(m.config.IncludeTables) > 0 {
+		included := false
+		for _, tableName := range m.config.IncludeTables {
+			if tableName == table || tableName == fullTableName {
+				included = true
+				break
+			}
+		}
+		if !included {
+			return true
+		}
+	}
+	
+	// Check exclude filter
+	if len(m.config.ExcludeTables) > 0 {
+		for _, tableName := range m.config.ExcludeTables {
+			if tableName == table || tableName == fullTableName {
+				return true
+			}
+		}
+	}
+	
+	return false
+}
+
+// shouldFilterOperation checks if operation should be filtered based on configuration
+func (m *MySQLStreamProvider) shouldFilterOperation(operation string) bool {
+	// Check include filter
+	if len(m.config.IncludeOperations) > 0 {
+		included := false
+		for _, op := range m.config.IncludeOperations {
+			if strings.EqualFold(op, operation) {
+				included = true
+				break
+			}
+		}
+		if !included {
+			return true
+		}
+	}
+	
+	// Check exclude filter
+	if len(m.config.ExcludeOperations) > 0 {
+		for _, op := range m.config.ExcludeOperations {
+			if strings.EqualFold(op, operation) {
+				return true
+			}
+		}
+	}
+	
+	return false
+}
+
+// isFatalError determines if an error is fatal and should stop the stream
+func (m *MySQLStreamProvider) isFatalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	
+	errStr := err.Error()
+	
+	// Check for authentication/authorization errors (fatal)
+	fatalKeywords := []string{
+		"access denied",
+		"unknown database",
+		"table doesn't exist",
+		"invalid user",
+		"connection refused",
+		"host not allowed",
+		"too many connections",
+		"server has gone away",
+	}
+	
+	for _, keyword := range fatalKeywords {
+		if strings.Contains(strings.ToLower(errStr), keyword) {
+			return true
+		}
+	}
+	
+	// Retryable errors (network, temporary issues, etc.)
+	retryableKeywords := []string{
+		"timeout",
+		"connection",
+		"network",
+		"temporary",
+		"deadlock",
+		"lock wait timeout",
+		"connection lost",
+	}
+	
+	for _, keyword := range retryableKeywords {
+		if strings.Contains(strings.ToLower(errStr), keyword) {
+			return false
+		}
+	}
+	
+	// Default to retryable for unknown errors
+	return false
+}
+
+// cleanup performs cleanup operations
+func (m *MySQLStreamProvider) cleanup() {
+	m.logger.Info("Cleaning up MySQL stream provider")
+	m.isRunning = false
+	
+	if m.syncer != nil {
+		m.syncer.Close()
+	}
+}
+
+// Stop stops the MySQL stream provider
+func (m *MySQLStreamProvider) Stop() {
+	m.logger.Info("MySQL stream provider stopped")
+	if m.isRunning {
+		close(m.stopChannel)
+	}
+}
+
+// StreamType returns the type of stream
+func (m *MySQLStreamProvider) StreamType() string {
+	return "mysql"
+}
+
+// GetLastPosition returns the last processed binlog position
+func (m *MySQLStreamProvider) GetLastPosition() mysql.Position {
+	return m.lastPosition
+}
+
+// setupPositionTracking initializes position tracking
+func (m *MySQLStreamProvider) setupPositionTracking() error {
+	// Generate stream ID
+	m.streamID = fmt.Sprintf("mysql-%s-%d-%s", m.config.Host, m.config.Port, m.config.Database)
+	
+	// Setup position tracking if configured
+	if m.config.PositionTracking != nil {
+		tracker, err := position.NewTracker(m.config.PositionTracking)
+		if err != nil {
+			return fmt.Errorf("failed to create position tracker: %w", err)
+		}
+		
+		m.positionTracker = tracker
+		
+		// Try to load existing position
+		if err := m.loadSavedPosition(); err != nil {
+			m.logger.WithError(err).Warn("Failed to load saved position, starting from configured position")
+		}
+		
+		m.logger.WithFields(logrus.Fields{
+			"stream_id":     m.streamID,
+			"tracker_type":  m.config.PositionTracking.Type,
+		}).Info("Position tracking enabled")
+	} else {
+		// Setup default file-based position tracking
+		defaultConfig := &position.Config{
+			Type:     "file",
+			StreamID: m.streamID,
+			FileConfig: &position.FileConfig{
+				Directory:       "./positions",
+				FilePermissions: 0644,
+				EnableBackup:    true,
+				BackupCount:     5,
+			},
+			UpdateInterval:    30 * time.Second,
+			EnableCompression: false,
+			RetryAttempts:     3,
+			RetryDelay:        1 * time.Second,
+		}
+		
+		tracker, err := position.NewTracker(defaultConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create default position tracker: %w", err)
+		}
+		
+		m.positionTracker = tracker
+		m.config.PositionTracking = defaultConfig
+		
+		// Try to load existing position
+		if err := m.loadSavedPosition(); err != nil {
+			m.logger.WithError(err).Info("No saved position found, starting from configured position")
+		}
+		
+		m.logger.WithField("stream_id", m.streamID).Info("Default file-based position tracking enabled")
+	}
+	
+	return nil
+}
+
+// cleanupPositionTracking cleans up position tracking resources
+func (m *MySQLStreamProvider) cleanupPositionTracking() {
+	if m.positionTracker != nil {
+		// Save final position
+		if err := m.saveCurrentPosition(); err != nil {
+			m.logger.WithError(err).Error("Failed to save final position")
+		}
+		
+		// Close tracker
+		if err := m.positionTracker.Close(); err != nil {
+			m.logger.WithError(err).Error("Failed to close position tracker")
+		}
+	}
+}
+
+// loadSavedPosition loads the last saved position
+func (m *MySQLStreamProvider) loadSavedPosition() error {
+	if m.positionTracker == nil {
+		return fmt.Errorf("position tracker not initialized")
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	savedPos, metadata, err := m.positionTracker.Load(ctx, m.streamID)
+	if err != nil {
+		if err == position.ErrPositionNotFound {
+			return fmt.Errorf("no saved position found")
+		}
+		return fmt.Errorf("failed to load position: %w", err)
+	}
+	
+	// Convert to MySQL position
+	if mysqlPos, ok := savedPos.(*position.MySQLPosition); ok {
+		m.lastPosition = mysqlPos.ToMySQLPosition()
+		m.config.BinlogFile = mysqlPos.File
+		m.config.BinlogPosition = fmt.Sprintf("%d", mysqlPos.Position)
+		
+		m.logger.WithFields(logrus.Fields{
+			"file":     mysqlPos.File,
+			"position": mysqlPos.Position,
+			"metadata": metadata,
+		}).Info("Loaded saved MySQL position")
+		
+		return nil
+	}
+	
+	return fmt.Errorf("invalid position type in saved data")
+}
+
+// saveCurrentPosition saves the current position
+func (m *MySQLStreamProvider) saveCurrentPosition() error {
+	if m.positionTracker == nil {
+		return nil // Position tracking not enabled
+	}
+	
+	// Create MySQL position from current state
+	mysqlPos := position.NewMySQLPositionFromMySQL(m.lastPosition)
+	mysqlPos.SetTimestamp(time.Now().Unix())
+	
+	// Create metadata
+	metadata := map[string]interface{}{
+		"stream_type": "mysql",
+		"host":        m.config.Host,
+		"port":        m.config.Port,
+		"database":    m.config.Database,
+		"server_id":   m.config.ServerID,
+		"updated_at":  time.Now().Format(time.RFC3339),
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	if err := m.positionTracker.Save(ctx, m.streamID, mysqlPos, metadata); err != nil {
+		return fmt.Errorf("failed to save position: %w", err)
+	}
+	
+	m.logger.WithFields(logrus.Fields{
+		"file":     mysqlPos.File,
+		"position": mysqlPos.Position,
+	}).Debug("Saved MySQL position")
+	
+	return nil
+}
+
+// schedulePositionSaves starts a goroutine to periodically save positions
+func (m *MySQLStreamProvider) schedulePositionSaves(ctx context.Context) {
+	if m.config.PositionTracking == nil || m.config.PositionTracking.UpdateInterval == 0 {
+		return
+	}
+	
+	ticker := time.NewTicker(m.config.PositionTracking.UpdateInterval)
+	defer ticker.Stop()
+	
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-m.stopChannel:
+				return
+			case <-ticker.C:
+				if err := m.saveCurrentPosition(); err != nil {
+					m.logger.WithError(err).Warn("Failed to save position during scheduled save")
+				}
+			}
+		}
+	}()
+}

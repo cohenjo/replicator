@@ -1,0 +1,874 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/cohenjo/replicator/pkg/config"
+	"github.com/rs/zerolog/log"
+)
+
+// StreamRunner represents a stream management interface
+type StreamRunner interface {
+	Start(ctx context.Context, stream config.StreamConfig) error
+	Stop(ctx context.Context, name string) error
+	Pause(ctx context.Context, name string) error
+	Resume(ctx context.Context, name string) error
+	GetStatus(name string) StreamStatus
+	ListStreams() []StreamInfo
+}
+
+// StreamStatus represents the status of a stream
+type StreamStatus struct {
+	Name     string                `json:"name"`
+	Status   config.StreamStatus   `json:"status"`
+	Uptime   time.Duration         `json:"uptime"`
+	Metrics  map[string]interface{} `json:"metrics"`
+	Error    string                `json:"error,omitempty"`
+}
+
+// StreamInfo provides information about a stream
+type StreamInfo struct {
+	Name          string                `json:"name"`
+	Status        config.StreamStatus   `json:"status"`
+	Source        config.SourceConfig   `json:"source"`
+	Target        config.TargetConfig   `json:"target"`
+	Transformation *config.TransformationRulesConfig `json:"transformation,omitempty"`
+	Enabled       bool                  `json:"enabled"`
+	Uptime        time.Duration         `json:"uptime"`
+	LastError     string                `json:"last_error,omitempty"`
+}
+
+// DefaultStreamRunner implements StreamRunner
+type DefaultStreamRunner struct {
+	streams map[string]*StreamStatus
+	mutex   sync.RWMutex
+}
+
+// NewDefaultStreamRunner creates a new default stream runner
+func NewDefaultStreamRunner() *DefaultStreamRunner {
+	return &DefaultStreamRunner{
+		streams: make(map[string]*StreamStatus),
+	}
+}
+
+// Start starts a stream
+func (sr *DefaultStreamRunner) Start(ctx context.Context, stream config.StreamConfig) error {
+	sr.mutex.Lock()
+	defer sr.mutex.Unlock()
+	
+	sr.streams[stream.Name] = &StreamStatus{
+		Name:   stream.Name,
+		Status: config.StreamStatusStarting,
+		Metrics: make(map[string]interface{}),
+	}
+	
+	// Simulate starting
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		sr.mutex.Lock()
+		defer sr.mutex.Unlock()
+		if status, exists := sr.streams[stream.Name]; exists {
+			status.Status = config.StreamStatusRunning
+		}
+	}()
+	
+	return nil
+}
+
+// Stop stops a stream
+func (sr *DefaultStreamRunner) Stop(ctx context.Context, name string) error {
+	sr.mutex.Lock()
+	defer sr.mutex.Unlock()
+	
+	if status, exists := sr.streams[name]; exists {
+		status.Status = config.StreamStatusStopped
+	}
+	return nil
+}
+
+// Pause pauses a stream
+func (sr *DefaultStreamRunner) Pause(ctx context.Context, name string) error {
+	sr.mutex.Lock()
+	defer sr.mutex.Unlock()
+	
+	if status, exists := sr.streams[name]; exists {
+		status.Status = config.StreamStatusPaused
+	}
+	return nil
+}
+
+// Resume resumes a stream
+func (sr *DefaultStreamRunner) Resume(ctx context.Context, name string) error {
+	sr.mutex.Lock()
+	defer sr.mutex.Unlock()
+	
+	if status, exists := sr.streams[name]; exists {
+		status.Status = config.StreamStatusRunning
+	}
+	return nil
+}
+
+// GetStatus gets stream status
+func (sr *DefaultStreamRunner) GetStatus(name string) StreamStatus {
+	sr.mutex.RLock()
+	defer sr.mutex.RUnlock()
+	
+	if status, exists := sr.streams[name]; exists {
+		return *status
+	}
+	return StreamStatus{Name: name, Status: config.StreamStatusStopped}
+}
+
+// ListStreams lists all streams
+func (sr *DefaultStreamRunner) ListStreams() []StreamInfo {
+	sr.mutex.RLock()
+	defer sr.mutex.RUnlock()
+	
+	var streams []StreamInfo
+	for _, status := range sr.streams {
+		streams = append(streams, StreamInfo{
+			Name:   status.Name,
+			Status: status.Status,
+			Uptime: status.Uptime,
+		})
+	}
+	return streams
+}
+
+import (
+	"sync"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/cohenjo/replicator/pkg/config"
+	"github.com/cohenjo/replicator/pkg/streams"
+	"github.com/rs/zerolog/log"
+)
+
+// StreamResponse represents a stream in API responses
+type StreamResponse struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Type        string                 `json:"type"`
+	Status      string                 `json:"status"`
+	Source      config.SourceConfig    `json:"source"`
+	Target      config.TargetConfig    `json:"target"`
+	Metrics     StreamMetrics          `json:"metrics"`
+	CreatedAt   time.Time              `json:"created_at"`
+	UpdatedAt   time.Time              `json:"updated_at"`
+	LastError   string                 `json:"last_error,omitempty"`
+	NextRun     *time.Time             `json:"next_run,omitempty"`
+}
+
+	}
+	return streams
+}
+
+// StreamListResponse represents the response for listing streams
+type StreamListResponse struct {
+	Streams []StreamResponse `json:"streams"`
+	Total   int              `json:"total"`
+	Page    int              `json:"page"`
+	Limit   int              `json:"limit"`
+}
+
+// StreamCreateRequest represents a request to create a new stream
+type StreamCreateRequest struct {
+	Name      string                `json:"name"`
+	Type      string                `json:"type"`
+	Source    config.SourceConfig   `json:"source"`
+	Target    config.TargetConfig   `json:"target"`
+	AutoStart bool                  `json:"auto_start"`
+}
+
+// StreamUpdateRequest represents a request to update a stream
+type StreamUpdateRequest struct {
+	Name      *string               `json:"name,omitempty"`
+	Source    *config.SourceConfig  `json:"source,omitempty"`
+	Target    *config.TargetConfig  `json:"target,omitempty"`
+}
+
+// StreamActionRequest represents a request to perform an action on a stream
+type StreamActionRequest struct {
+	Action string `json:"action"` // start, stop, pause, resume, restart
+}
+
+// StreamMetrics represents metrics for a specific stream
+type StreamMetrics struct {
+	EventsProcessed   int64     `json:"events_processed"`
+	EventsPerSecond   float64   `json:"events_per_second"`
+	LastEventTime     time.Time `json:"last_event_time"`
+	ProcessingLagMs   int64     `json:"processing_lag_ms"`
+	ErrorCount        int64     `json:"error_count"`
+	UptimeSeconds     int64     `json:"uptime_seconds"`
+	BytesProcessed    int64     `json:"bytes_processed"`
+	LastCheckpoint    string    `json:"last_checkpoint,omitempty"`
+}
+
+// StreamManager defines the interface for managing streams
+type StreamManager interface {
+	ListStreams(page, limit int, filter string) ([]StreamResponse, int, error)
+	GetStream(id string) (*StreamResponse, error)
+	CreateStream(req StreamCreateRequest) (*StreamResponse, error)
+	UpdateStream(id string, req StreamUpdateRequest) (*StreamResponse, error)
+	DeleteStream(id string) error
+	StartStream(id string) error
+	StopStream(id string) error
+	PauseStream(id string) error
+	ResumeStream(id string) error
+	RestartStream(id string) error
+	GetStreamMetrics(id string) (*StreamMetrics, error)
+}
+
+// StreamService implements the StreamManager interface
+type StreamService struct {
+	config       *config.Config
+	streamRunner streams.StreamRunner
+	streamStore  map[string]*StreamResponse // In-memory store for demo
+}
+
+// NewStreamService creates a new stream service
+func NewStreamService(cfg *config.Config, runner streams.StreamRunner) *StreamService {
+	return &StreamService{
+		config:       cfg,
+		streamRunner: runner,
+		streamStore:  make(map[string]*StreamResponse),
+	}
+}
+
+// ListStreams returns a paginated list of streams
+func (s *StreamService) ListStreams(page, limit int, filter string) ([]StreamResponse, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+
+	// Get all streams
+	allStreams := make([]StreamResponse, 0, len(s.streamStore))
+	for _, stream := range s.streamStore {
+		// Apply filter if provided
+		if filter != "" {
+			filterLower := strings.ToLower(filter)
+			if !strings.Contains(strings.ToLower(stream.Name), filterLower) &&
+				!strings.Contains(strings.ToLower(stream.Type), filterLower) &&
+				!strings.Contains(strings.ToLower(stream.Status), filterLower) {
+				continue
+			}
+		}
+		allStreams = append(allStreams, *stream)
+	}
+
+	total := len(allStreams)
+
+	// Apply pagination
+	start := (page - 1) * limit
+	end := start + limit
+	if start >= total {
+		return []StreamResponse{}, total, nil
+	}
+	if end > total {
+		end = total
+	}
+
+	return allStreams[start:end], total, nil
+}
+
+// GetStream returns a specific stream by ID
+func (s *StreamService) GetStream(id string) (*StreamResponse, error) {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return nil, fmt.Errorf("stream with ID %s not found", id)
+	}
+	
+	// Update metrics
+	if metrics, err := s.GetStreamMetrics(id); err == nil {
+		stream.Metrics = *metrics
+	}
+	
+	return stream, nil
+}
+
+// CreateStream creates a new replication stream
+func (s *StreamService) CreateStream(req StreamCreateRequest) (*StreamResponse, error) {
+	// Validate request
+	if req.Name == "" {
+		return nil, fmt.Errorf("stream name is required")
+	}
+	if req.Type == "" {
+		return nil, fmt.Errorf("stream type is required")
+	}
+
+	// Validate source and target configs
+	if err := req.Source.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid source config: %w", err)
+	}
+	if err := req.Target.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid target config: %w", err)
+	}
+
+	// Generate ID
+	id := generateStreamID(req.Name)
+
+	// Check if stream with this ID already exists
+	if _, exists := s.streamStore[id]; exists {
+		return nil, fmt.Errorf("stream with name %s already exists", req.Name)
+	}
+
+	// Create stream response
+	now := time.Now()
+	stream := &StreamResponse{
+		ID:        id,
+		Name:      req.Name,
+		Type:      req.Type,
+		Status:    "created",
+		Source:    req.Source,
+		Target:    req.Target,
+		Transform: req.Transform,
+		Metrics: StreamMetrics{
+			EventsProcessed:   0,
+			EventsPerSecond:   0,
+			LastEventTime:     time.Time{},
+			ProcessingLagMs:   0,
+			ErrorCount:        0,
+			UptimeSeconds:     0,
+			BytesProcessed:    0,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	// Store stream
+	s.streamStore[id] = stream
+
+	// Auto-start if requested
+	if req.AutoStart {
+		if err := s.StartStream(id); err != nil {
+			log.Warn().Err(err).Str("stream_id", id).Msg("Failed to auto-start stream")
+		}
+	}
+
+	log.Info().
+		Str("stream_id", id).
+		Str("stream_name", req.Name).
+		Str("stream_type", req.Type).
+		Bool("auto_start", req.AutoStart).
+		Msg("Stream created successfully")
+
+	return stream, nil
+}
+
+// UpdateStream updates an existing stream
+func (s *StreamService) UpdateStream(id string, req StreamUpdateRequest) (*StreamResponse, error) {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return nil, fmt.Errorf("stream with ID %s not found", id)
+	}
+
+	// Check if stream is running (can't update running streams)
+	if stream.Status == "running" {
+		return nil, fmt.Errorf("cannot update running stream, stop it first")
+	}
+
+	// Apply updates
+	if req.Name != nil {
+		stream.Name = *req.Name
+	}
+	if req.Source != nil {
+		if err := req.Source.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid source config: %w", err)
+		}
+		stream.Source = *req.Source
+	}
+	if req.Target != nil {
+		if err := req.Target.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid target config: %w", err)
+		}
+		stream.Target = *req.Target
+	}
+	if req.Transform != nil {
+		stream.Transform = req.Transform
+	}
+
+	stream.UpdatedAt = time.Now()
+
+	log.Info().
+		Str("stream_id", id).
+		Str("stream_name", stream.Name).
+		Msg("Stream updated successfully")
+
+	return stream, nil
+}
+
+// DeleteStream deletes a stream
+func (s *StreamService) DeleteStream(id string) error {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return fmt.Errorf("stream with ID %s not found", id)
+	}
+
+	// Stop stream if running
+	if stream.Status == "running" || stream.Status == "paused" {
+		if err := s.StopStream(id); err != nil {
+			log.Warn().Err(err).Str("stream_id", id).Msg("Failed to stop stream before deletion")
+		}
+	}
+
+	// Delete from store
+	delete(s.streamStore, id)
+
+	log.Info().
+		Str("stream_id", id).
+		Str("stream_name", stream.Name).
+		Msg("Stream deleted successfully")
+
+	return nil
+}
+
+// StartStream starts a replication stream
+func (s *StreamService) StartStream(id string) error {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return fmt.Errorf("stream with ID %s not found", id)
+	}
+
+	if stream.Status == "running" {
+		return fmt.Errorf("stream is already running")
+	}
+
+	// TODO: Implement actual stream starting logic with streamRunner
+	stream.Status = "running"
+	stream.UpdatedAt = time.Now()
+	stream.LastError = ""
+
+	log.Info().
+		Str("stream_id", id).
+		Str("stream_name", stream.Name).
+		Msg("Stream started successfully")
+
+	return nil
+}
+
+// StopStream stops a replication stream
+func (s *StreamService) StopStream(id string) error {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return fmt.Errorf("stream with ID %s not found", id)
+	}
+
+	if stream.Status == "stopped" {
+		return fmt.Errorf("stream is already stopped")
+	}
+
+	// TODO: Implement actual stream stopping logic with streamRunner
+	stream.Status = "stopped"
+	stream.UpdatedAt = time.Now()
+
+	log.Info().
+		Str("stream_id", id).
+		Str("stream_name", stream.Name).
+		Msg("Stream stopped successfully")
+
+	return nil
+}
+
+// PauseStream pauses a replication stream
+func (s *StreamService) PauseStream(id string) error {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return fmt.Errorf("stream with ID %s not found", id)
+	}
+
+	if stream.Status != "running" {
+		return fmt.Errorf("can only pause running streams")
+	}
+
+	stream.Status = "paused"
+	stream.UpdatedAt = time.Now()
+
+	log.Info().
+		Str("stream_id", id).
+		Str("stream_name", stream.Name).
+		Msg("Stream paused successfully")
+
+	return nil
+}
+
+// ResumeStream resumes a paused stream
+func (s *StreamService) ResumeStream(id string) error {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return fmt.Errorf("stream with ID %s not found", id)
+	}
+
+	if stream.Status != "paused" {
+		return fmt.Errorf("can only resume paused streams")
+	}
+
+	stream.Status = "running"
+	stream.UpdatedAt = time.Now()
+
+	log.Info().
+		Str("stream_id", id).
+		Str("stream_name", stream.Name).
+		Msg("Stream resumed successfully")
+
+	return nil
+}
+
+// RestartStream restarts a stream
+func (s *StreamService) RestartStream(id string) error {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return fmt.Errorf("stream with ID %s not found", id)
+	}
+
+	// Stop if running
+	if stream.Status == "running" || stream.Status == "paused" {
+		if err := s.StopStream(id); err != nil {
+			return fmt.Errorf("failed to stop stream: %w", err)
+		}
+	}
+
+	// Start again
+	return s.StartStream(id)
+}
+
+// GetStreamMetrics returns metrics for a specific stream
+func (s *StreamService) GetStreamMetrics(id string) (*StreamMetrics, error) {
+	stream, exists := s.streamStore[id]
+	if !exists {
+		return nil, fmt.Errorf("stream with ID %s not found", id)
+	}
+
+	// TODO: Implement actual metrics collection from streamRunner
+	// For now, return mock metrics
+	metrics := &StreamMetrics{
+		EventsProcessed:   1000,
+		EventsPerSecond:   10.5,
+		LastEventTime:     time.Now().Add(-time.Minute),
+		ProcessingLagMs:   100,
+		ErrorCount:        0,
+		UptimeSeconds:     int64(time.Since(stream.CreatedAt).Seconds()),
+		BytesProcessed:    50000,
+		LastCheckpoint:    "2024-01-01T12:00:00Z",
+	}
+
+	if stream.Status == "running" {
+		metrics.EventsPerSecond = 15.2
+		metrics.LastEventTime = time.Now().Add(-time.Second * 10)
+	} else {
+		metrics.EventsPerSecond = 0
+	}
+
+	return metrics, nil
+}
+
+// StreamsHandler handles HTTP requests for stream management
+type StreamsHandler struct {
+	streamService StreamManager
+}
+
+// NewStreamsHandler creates a new streams HTTP handler
+func NewStreamsHandler(streamService StreamManager) *StreamsHandler {
+	return &StreamsHandler{
+		streamService: streamService,
+	}
+}
+
+// ServeHTTP implements the http.Handler interface for streams
+func (h *StreamsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	method := r.Method
+
+	// Route requests
+	if path == "/streams" {
+		switch method {
+		case http.MethodGet:
+			h.handleListStreams(w, r)
+		case http.MethodPost:
+			h.handleCreateStream(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	// Handle /streams/{id} endpoints
+	if strings.HasPrefix(path, "/streams/") {
+		parts := strings.Split(path, "/")
+		if len(parts) < 3 {
+			http.Error(w, "Invalid stream ID", http.StatusBadRequest)
+			return
+		}
+		streamID := parts[2]
+
+		if len(parts) == 3 {
+			// /streams/{id}
+			switch method {
+			case http.MethodGet:
+				h.handleGetStream(w, r, streamID)
+			case http.MethodPut:
+				h.handleUpdateStream(w, r, streamID)
+			case http.MethodDelete:
+				h.handleDeleteStream(w, r, streamID)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
+		if len(parts) == 4 {
+			// /streams/{id}/{action}
+			action := parts[3]
+			switch action {
+			case "actions":
+				if method == http.MethodPost {
+					h.handleStreamAction(w, r, streamID)
+				} else {
+					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				}
+			case "metrics":
+				if method == http.MethodGet {
+					h.handleGetStreamMetrics(w, r, streamID)
+				} else {
+					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				}
+			default:
+				http.Error(w, "Invalid action", http.StatusBadRequest)
+			}
+			return
+		}
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
+}
+
+// handleListStreams handles GET /streams
+func (h *StreamsHandler) handleListStreams(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	pageParam := r.URL.Query().Get("page")
+	limitParam := r.URL.Query().Get("limit")
+	filter := r.URL.Query().Get("filter")
+
+	page := 1
+	if pageParam != "" {
+		if p, err := strconv.Atoi(pageParam); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	limit := 20
+	if limitParam != "" {
+		if l, err := strconv.Atoi(limitParam); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	// Get streams
+	streams, total, err := h.streamService.ListStreams(page, limit, filter)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to list streams")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Create response
+	response := StreamListResponse{
+		Streams: streams,
+		Total:   total,
+		Page:    page,
+		Limit:   limit,
+	}
+
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Error().Err(err).Msg("Failed to encode streams list response")
+	}
+}
+
+// handleGetStream handles GET /streams/{id}
+func (h *StreamsHandler) handleGetStream(w http.ResponseWriter, r *http.Request, streamID string) {
+	stream, err := h.streamService.GetStream(streamID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to get stream")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(stream); err != nil {
+		log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to encode stream response")
+	}
+}
+
+// handleCreateStream handles POST /streams
+func (h *StreamsHandler) handleCreateStream(w http.ResponseWriter, r *http.Request) {
+	var req StreamCreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	stream, err := h.streamService.CreateStream(req)
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") ||
+			strings.Contains(err.Error(), "required") ||
+			strings.Contains(err.Error(), "invalid") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else {
+			log.Error().Err(err).Str("stream_name", req.Name).Msg("Failed to create stream")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(stream); err != nil {
+		log.Error().Err(err).Str("stream_id", stream.ID).Msg("Failed to encode create stream response")
+	}
+}
+
+// handleUpdateStream handles PUT /streams/{id}
+func (h *StreamsHandler) handleUpdateStream(w http.ResponseWriter, r *http.Request, streamID string) {
+	var req StreamUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	stream, err := h.streamService.UpdateStream(streamID, req)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else if strings.Contains(err.Error(), "cannot update") ||
+			strings.Contains(err.Error(), "invalid") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else {
+			log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to update stream")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(stream); err != nil {
+		log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to encode update stream response")
+	}
+}
+
+// handleDeleteStream handles DELETE /streams/{id}
+func (h *StreamsHandler) handleDeleteStream(w http.ResponseWriter, r *http.Request, streamID string) {
+	err := h.streamService.DeleteStream(streamID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to delete stream")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleStreamAction handles POST /streams/{id}/actions
+func (h *StreamsHandler) handleStreamAction(w http.ResponseWriter, r *http.Request, streamID string) {
+	var req StreamActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	var err error
+	switch strings.ToLower(req.Action) {
+	case "start":
+		err = h.streamService.StartStream(streamID)
+	case "stop":
+		err = h.streamService.StopStream(streamID)
+	case "pause":
+		err = h.streamService.PauseStream(streamID)
+	case "resume":
+		err = h.streamService.ResumeStream(streamID)
+	case "restart":
+		err = h.streamService.RestartStream(streamID)
+	default:
+		http.Error(w, "Invalid action. Supported actions: start, stop, pause, resume, restart", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else if strings.Contains(err.Error(), "already") ||
+			strings.Contains(err.Error(), "can only") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else {
+			log.Error().Err(err).Str("stream_id", streamID).Str("action", req.Action).Msg("Failed to perform stream action")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Return updated stream
+	stream, err := h.streamService.GetStream(streamID)
+	if err != nil {
+		log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to get stream after action")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(stream); err != nil {
+		log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to encode stream action response")
+	}
+}
+
+// handleGetStreamMetrics handles GET /streams/{id}/metrics
+func (h *StreamsHandler) handleGetStreamMetrics(w http.ResponseWriter, r *http.Request, streamID string) {
+	metrics, err := h.streamService.GetStreamMetrics(streamID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to get stream metrics")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(metrics); err != nil {
+		log.Error().Err(err).Str("stream_id", streamID).Msg("Failed to encode stream metrics response")
+	}
+}
+
+// generateStreamID generates a unique ID for a stream based on name
+func generateStreamID(name string) string {
+	// Simple ID generation - in production, use UUID or similar
+	timestamp := time.Now().Unix()
+	sanitizedName := strings.ReplaceAll(strings.ToLower(name), " ", "_")
+	return fmt.Sprintf("%s_%d", sanitizedName, timestamp)
+}

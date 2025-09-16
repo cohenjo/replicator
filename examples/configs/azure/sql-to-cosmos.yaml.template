@@ -1,0 +1,85 @@
+# Azure SQL Database to CosmosDB Configuration Template
+# Copy this file and replace placeholder values with your Azure resources
+# DO NOT commit this file with real credentials to version control
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  metrics_port: 9090
+
+logging:
+  level: "warn"
+  format: "json"
+
+# Azure Entra ID Authentication
+authentication:
+  - id: "azure_entra_sql"
+    type: "azure_entra"
+    config:
+      tenant_id: "${AZURE_TENANT_ID}"
+      client_id: "${AZURE_CLIENT_ID}"
+      client_secret: "${AZURE_CLIENT_SECRET}"
+      scope: "https://database.windows.net/.default"
+
+  - id: "azure_entra_cosmos"
+    type: "azure_entra"
+    config:
+      tenant_id: "${AZURE_TENANT_ID}"
+      client_id: "${AZURE_CLIENT_ID}"
+      client_secret: "${AZURE_CLIENT_SECRET}"
+      scope: "https://cosmos.azure.com/.default"
+
+sources:
+  - name: "azure-sql-customers"
+    type: "azuresql"
+    connection_string: "Server=tcp:YOUR_SERVER.database.windows.net,1433;Database=YOUR_DATABASE;Authentication=Active Directory Service Principal;Encrypt=true;"
+    auth_id: "azure_entra_sql"
+    table: "customers"
+    change_tracking:
+      enabled: true
+      snapshot_isolation: true
+    batch_size: 500
+    timeout: "30s"
+
+estuary:
+  - name: "cosmos-analytics"
+    type: "cosmosdb"
+    connection_string: "AccountEndpoint=https://YOUR_COSMOS_ACCOUNT.documents.azure.com:443/;AccountKey=${COSMOS_PRIMARY_KEY};"
+    auth_id: "azure_entra_cosmos"
+    database: "analytics"
+    container: "customer_profiles"
+    partition_key: "/customer_id"
+    consistency_level: "session"
+    write_options:
+      upsert: true
+      bulk_operations: true
+      max_batch_size: 100
+
+streams:
+  - name: "sql-to-cosmos-customers"
+    source: "azure-sql-customers"
+    estuary: "cosmos-analytics"
+    transforms:
+      - type: "field-mapping"
+        config:
+          mapping:
+            "id": "$.customer_id"
+            "customer_id": "$.customer_id"
+            "profile":
+              "first_name": "$.first_name"
+              "last_name": "$.last_name"
+              "email": "$.email"
+              "phone": "$.phone"
+              "address": "$.address"
+            "preferences":
+              "marketing_consent": "$.marketing_consent"
+              "newsletter": "$.newsletter_subscription"
+            "metadata":
+              "created_at": "$.created_date"
+              "updated_at": "$.last_modified_date"
+              "source_system": "azure_sql"
+              "sync_timestamp": "now()"
+      - type: "data-enrichment"
+        config:
+          enrichments:
+            "customer_tier": |\n              if $.total_orders > 100 then \"platinum\"\n              elif $.total_orders > 50 then \"gold\"\n              elif $.total_orders > 10 then \"silver\"\n              else \"bronze\"\n              end\n            "full_name": "concat($.first_name, ' ', $.last_name)"\n            "account_age_days": "days_between($.created_date, now())"\n    error_handling:\n      strategy: "retry"\n      max_retries: 3\n      retry_delay: "10s"\n      dead_letter_container: "failed_customer_updates"\n    position_tracking:\n      enabled: true\n      storage_type: "azure_table"\n      storage_config:\n        account_name: "YOUR_STORAGE_ACCOUNT"\n        table_name: "ReplicatorPositions"\n        auth_method: "entra_id"\n\nmonitoring:\n  metrics:\n    enabled: true\n    path: "/metrics"\n  health:\n    enabled: true\n    path: "/health"\n  azure_monitor:\n    enabled: true\n    workspace_id: "${AZURE_LOG_ANALYTICS_WORKSPACE_ID}"\n    auth_id: "azure_entra_sql"\n    custom_metrics:\n      - name: "customer_sync_rate"\n        query: "rate(replicator_events_processed_total{stream_name='sql-to-cosmos-customers'}[5m])"\n  application_insights:\n    enabled: true\n    instrumentation_key: "${APPLICATION_INSIGHTS_KEY}"\n    auth_id: "azure_entra_sql"\n\n# Environment Variables Required:\n# AZURE_TENANT_ID=your-azure-tenant-id\n# AZURE_CLIENT_ID=your-service-principal-client-id\n# AZURE_CLIENT_SECRET=your-service-principal-secret\n# COSMOS_PRIMARY_KEY=your-cosmos-db-primary-key\n# AZURE_LOG_ANALYTICS_WORKSPACE_ID=your-workspace-id\n# APPLICATION_INSIGHTS_KEY=your-app-insights-key
