@@ -6,12 +6,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cohenjo/replicator/pkg/auth"
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/pquerna/ffjson/ffjson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"gopkg.in/mgo.v2/bson"
 )
 
@@ -23,30 +23,33 @@ type MongoEndpoint struct {
 }
 
 func NewMongoEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MongoEndpoint) {
-	// Set client options with timeout
+	// Set timeout context
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	
+	// Prepare auth config
+	authConfig := &auth.MongoAuthConfig{}
+	
 	// Use MongoURI if provided, otherwise build from individual components
-	var uri string
 	if streamConfig.MongoURI != "" {
-		uri = streamConfig.MongoURI
+		authConfig.ConnectionURI = streamConfig.MongoURI
 	} else {
 		// Fallback to global config (legacy behavior)
-		uri = fmt.Sprintf("mongodb://%s:%s@%s:%d/admin", config.Global.DBUser, config.Global.DBPasswd, streamConfig.Host, streamConfig.Port)
+		authConfig.ConnectionURI = fmt.Sprintf("mongodb://%s:%s@%s:%d/admin", 
+			config.Global.DBUser, 
+			config.Global.DBPasswd, 
+			streamConfig.Host, 
+			streamConfig.Port)
 	}
 	
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	// TODO: Add Entra authentication support to WaterFlowsConfig
+	// For now, default to connection string authentication
+	authConfig.AuthMethod = "connection_string"
+	
+	client, err := auth.NewMongoClientWithAuth(ctx, authConfig)
 	if err != nil {
 		logger.Error().Err(err).Msg("connection failure")
 		panic(fmt.Sprintf("Failed to connect to MongoDB: %v", err))
-	}
-
-	// Check the connection
-	err = client.Ping(ctx, nil)
-	if err != nil {
-		logger.Error().Err(err).Msg("connection ping failure")
-		panic(fmt.Sprintf("Failed to ping MongoDB: %v", err))
 	}
 
 	fmt.Println("Connected to MongoDB!")

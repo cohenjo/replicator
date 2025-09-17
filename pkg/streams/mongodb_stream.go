@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"github.com/rs/zerolog/log"
 
+	"github.com/cohenjo/replicator/pkg/auth"
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/cohenjo/replicator/pkg/models"
@@ -209,12 +210,14 @@ func (s *MongoDBStream) GetCheckpoint() (map[string]interface{}, error) {
 	return make(map[string]interface{}), nil
 }
 
-// connect establishes connection to MongoDB
+// connect establishes connection to MongoDB using shared authentication
 func (s *MongoDBStream) connect() error {
+	// Build auth config from stream config
+	authConfig := &auth.MongoAuthConfig{}
+	
 	// Use URI if provided, otherwise build connection string
-	var connectionString string
 	if s.config.Source.URI != "" {
-		connectionString = s.config.Source.URI
+		authConfig.ConnectionURI = s.config.Source.URI
 	} else {
 		// Build connection string from individual components
 		// For MongoDB, authentication should be against admin database
@@ -225,7 +228,7 @@ func (s *MongoDBStream) connect() error {
 			}
 		}
 		
-		connectionString = fmt.Sprintf("mongodb://%s:%s@%s:%d/%s?authSource=%s",
+		authConfig.ConnectionURI = fmt.Sprintf("mongodb://%s:%s@%s:%d/%s?authSource=%s",
 			s.config.Source.Username,
 			s.config.Source.Password,
 			s.config.Source.Host,
@@ -234,23 +237,53 @@ func (s *MongoDBStream) connect() error {
 			authDB,
 		)
 	}
-
-	// Create client options
-	clientOptions := options.Client().ApplyURI(connectionString)
-
-	// Connect to MongoDB
-	client, err := mongo.Connect(s.ctx, clientOptions)
+	
+	// Check for Entra authentication options
+	if s.config.Source.Options != nil {
+		if authMethod, ok := s.config.Source.Options["auth_method"].(string); ok {
+			authConfig.AuthMethod = authMethod
+		}
+		
+		if tenantID, ok := s.config.Source.Options["tenant_id"].(string); ok {
+			authConfig.TenantID = tenantID
+		}
+		
+		if clientID, ok := s.config.Source.Options["client_id"].(string); ok {
+			authConfig.ClientID = clientID
+		}
+		
+		if scopes, ok := s.config.Source.Options["scopes"].([]string); ok {
+			authConfig.Scopes = scopes
+		} else if scopesInterface, ok := s.config.Source.Options["scopes"].([]interface{}); ok {
+			// Handle case where scopes come from YAML as []interface{}
+			for _, scope := range scopesInterface {
+				if scopeStr, ok := scope.(string); ok {
+					authConfig.Scopes = append(authConfig.Scopes, scopeStr)
+				}
+			}
+		}
+		
+		if refreshBefore, ok := s.config.Source.Options["refresh_before_expiry"].(time.Duration); ok {
+			authConfig.RefreshBeforeExpiry = refreshBefore
+		}
+	}
+	
+	// Default to connection string auth if not specified
+	if authConfig.AuthMethod == "" {
+		authConfig.AuthMethod = "connection_string"
+	}
+	
+	// Connect using shared auth function
+	client, err := auth.NewMongoClientWithAuth(s.ctx, authConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
 
-	// Test the connection
-	if err := client.Ping(s.ctx, nil); err != nil {
-		return fmt.Errorf("failed to ping MongoDB: %w", err)
-	}
-
 	s.client = client
-	log.Info().Str("stream", s.config.Name).Msg("Connected to MongoDB")
+	log.Info().
+		Str("stream", s.config.Name).
+		Str("auth_method", authConfig.AuthMethod).
+		Msg("Connected to MongoDB")
 	return nil
 }
 

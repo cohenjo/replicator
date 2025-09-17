@@ -49,6 +49,40 @@ The schema must exist before you start the replicator. Also, Replicator does not
 
 You should have a unique ID named `id` 
 
+## Azure Entra Authentication 🔒
+
+Replicator now supports **Azure Entra authentication** for MongoDB Cosmos DB using workload identity! This provides enterprise-grade security without managing secrets.
+
+### Features
+- ✅ **Workload Identity**: No secrets in configuration  
+- ✅ **Token Management**: Automatic refresh and caching
+- ✅ **Scope Validation**: Prevents configuration mistakes
+- ✅ **Backwards Compatible**: Existing connections unchanged
+
+### Configuration Example
+```yaml
+streams:
+  - name: "cosmos-stream"
+    source:
+      type: "mongodb"
+      uri: "mongodb://cosmos-cluster.mongo.cosmos.azure.com:10255/"
+      database: "production"
+      options:
+        auth_method: "entra"                                    # Enable Entra auth
+        tenant_id: "12345678-1234-1234-1234-123456789012"     # Azure tenant
+        client_id: "87654321-4321-4321-4321-210987654321"     # App registration
+        scopes: ["https://cosmos.azure.com/.default"]          # Cosmos DB scope
+        refresh_before_expiry: "5m"                            # Token refresh buffer
+```
+
+### Azure Setup Requirements
+1. **AKS Cluster**: With workload identity enabled
+2. **App Registration**: Azure Entra application with MongoDB permissions  
+3. **Cosmos DB**: Azure Cosmos DB for MongoDB vCore with AAD authentication
+4. **Role Assignment**: Cosmos DB Data Contributor role for the application
+
+For complete setup instructions, see [MongoDB Entra Implementation Guide](docs/MONGODB_ENTRA_IMPLEMENTATION.md).
+
 
 ## Performance Status
 
