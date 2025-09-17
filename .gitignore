@@ -58,7 +58,11 @@ Thumbs.db
 *.out
 *.prof
 
-replicator
+# Binary executables (specific patterns to avoid catching source directories)
+/replicator
+replicator.exe
+cmd/replicator/replicator
+cmd/replicator/replicator.exe
 
 # Local temp Tests and files
 deploy/
