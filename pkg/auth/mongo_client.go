@@ -99,29 +99,21 @@ func NewMongoClientWithAuth(ctx context.Context, config *MongoAuthConfig) (*mong
 
 // validateEntraConfig validates the Entra authentication configuration
 func validateEntraConfig(config *MongoAuthConfig) error {
-	if config.TenantID == "" {
-		return fmt.Errorf("tenant ID is required for Entra authentication")
-	}
-	
-	if config.ClientID == "" {
-		return fmt.Errorf("client ID is required for Entra authentication")
-	}
 	
 	if len(config.Scopes) == 0 {
-		config.Scopes = []string{"https://cosmos.azure.com/.default"}
+		config.Scopes = []string{"https://ossrdbms-aad.database.windows.net/.default"}
 	}
 	
 	// Validate scopes for Azure Cosmos DB
 	validScopeFound := false
 	for _, scope := range config.Scopes {
-		if scope == "https://cosmos.azure.com/.default" {
+		if scope == "https://ossrdbms-aad.database.windows.net/.default" {
 			validScopeFound = true
 			break
 		}
 		
 		// Check for invalid scopes from other Azure services
 		invalidScopes := []string{
-			"https://ossrdbms-aad.database.windows.net/.default", // PostgreSQL/MySQL
 			"https://database.windows.net/.default",              // SQL Server
 			"https://vault.azure.net/.default",                   // Key Vault
 			"https://storage.azure.com/.default",                 // Storage
@@ -135,7 +127,7 @@ func validateEntraConfig(config *MongoAuthConfig) error {
 	}
 	
 	if !validScopeFound {
-		return fmt.Errorf("invalid scope for Azure Cosmos DB, must include 'https://cosmos.azure.com/.default'")
+		return fmt.Errorf("invalid scope for Azure Cosmos DB, must include 'https://ossrdbms-aad.database.windows.net/.default'")
 	}
 	
 	if config.RefreshBeforeExpiry == 0 {
@@ -184,10 +176,11 @@ func initAuthManager(config *MongoAuthConfig) error {
 	
 	authOnce.Do(func() {
 		// Create Azure workload identity credential
-		cred, err := azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
-			TenantID: config.TenantID,
-			ClientID: config.ClientID,
-		})
+		cred, err := azidentity.NewDefaultAzureCredential(nil)
+		// cred, err := azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
+		// 	TenantID: config.TenantID,
+		// 	ClientID: config.ClientID,
+		// })
 		if err != nil {
 			initErr = fmt.Errorf("failed to create workload identity credential: %w", err)
 			return

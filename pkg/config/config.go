@@ -334,17 +334,24 @@ type WaterFlowsConfig struct {
 	Schema     string `json:"schema" yaml:"schema"`
 	Collection string `json:"collection" yaml:"collection"`
 	
-	// MongoDB specific fields
-	MongoURI                     string   `json:"mongo_uri,omitempty" yaml:"mongo_uri,omitempty"`
-	MongoDatabaseName            string   `json:"mongo_database_name,omitempty" yaml:"mongo_database_name,omitempty"`
-	MongoCollectionName          string   `json:"mongo_collection_name,omitempty" yaml:"mongo_collection_name,omitempty"`
-	MongoStartAtOperationTime    bool     `json:"mongo_start_at_operation_time,omitempty" yaml:"mongo_start_at_operation_time,omitempty"`
-	MongoFullDocument            string   `json:"mongo_full_document,omitempty" yaml:"mongo_full_document,omitempty"`
-	MongoResumeAfter             string   `json:"mongo_resume_after,omitempty" yaml:"mongo_resume_after,omitempty"`
-	MongoMaxAwaitTime            int      `json:"mongo_max_await_time,omitempty" yaml:"mongo_max_await_time,omitempty"`
-	MongoBatchSize               int32    `json:"mongo_batch_size,omitempty" yaml:"mongo_batch_size,omitempty"`
-	MongoIncludeOperations       []string `json:"mongo_include_operations,omitempty" yaml:"mongo_include_operations,omitempty"`
-	MongoExcludeOperations       []string `json:"mongo_exclude_operations,omitempty" yaml:"mongo_exclude_operations,omitempty"`
+// MongoDB specific fields
+MongoURI                     string   `json:"mongo_uri,omitempty" yaml:"mongo_uri,omitempty"`
+MongoDatabaseName            string   `json:"mongo_database_name,omitempty" yaml:"mongo_database_name,omitempty"`
+MongoCollectionName          string   `json:"mongo_collection_name,omitempty" yaml:"mongo_collection_name,omitempty"`
+MongoStartAtOperationTime    bool     `json:"mongo_start_at_operation_time,omitempty" yaml:"mongo_start_at_operation_time,omitempty"`
+MongoFullDocument            string   `json:"mongo_full_document,omitempty" yaml:"mongo_full_document,omitempty"`
+MongoResumeAfter             string   `json:"mongo_resume_after,omitempty" yaml:"mongo_resume_after,omitempty"`
+MongoMaxAwaitTime            int      `json:"mongo_max_await_time,omitempty" yaml:"mongo_max_await_time,omitempty"`
+MongoBatchSize               int32    `json:"mongo_batch_size,omitempty" yaml:"mongo_batch_size,omitempty"`
+MongoIncludeOperations       []string `json:"mongo_include_operations,omitempty" yaml:"mongo_include_operations,omitempty"`
+MongoExcludeOperations       []string `json:"mongo_exclude_operations,omitempty" yaml:"mongo_exclude_operations,omitempty"`
+
+// MongoDB authentication specific fields
+MongoAuthMethod              string   `json:"mongo_auth_method,omitempty" yaml:"mongo_auth_method,omitempty"`
+MongoTenantID                string   `json:"mongo_tenant_id,omitempty" yaml:"mongo_tenant_id,omitempty"`
+MongoClientID                string   `json:"mongo_client_id,omitempty" yaml:"mongo_client_id,omitempty"`
+MongoScopes                  []string `json:"mongo_scopes,omitempty" yaml:"mongo_scopes,omitempty"`
+MongoRefreshBeforeExpiry     string   `json:"mongo_refresh_before_expiry,omitempty" yaml:"mongo_refresh_before_expiry,omitempty"`
 	
 	// Cosmos DB specific fields
 	CosmosEndpoint               string   `json:"cosmos_endpoint,omitempty" yaml:"cosmos_endpoint,omitempty"`
