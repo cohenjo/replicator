@@ -70,13 +70,16 @@ func NewMongoClientWithAuth(ctx context.Context, config *MongoAuthConfig) (*mong
 		return nil, fmt.Errorf("connection URI is required")
 	}
 	
-	// Set default auth method
+	// Set default auth method to MONGODB-OIDC (Entra)
 	if config.AuthMethod == "" {
-		config.AuthMethod = "connection_string"
+		config.AuthMethod = "entra"
 	}
 	
-	// Create client options
+	// Create client options with default parameters
 	clientOpts := options.Client().ApplyURI(config.ConnectionURI)
+	
+	// Apply default connection parameters
+	applyDefaultConnectionParams(clientOpts)
 	
 	switch config.AuthMethod {
 	case "connection_string":
@@ -95,6 +98,25 @@ func NewMongoClientWithAuth(ctx context.Context, config *MongoAuthConfig) (*mong
 	default:
 		return nil, fmt.Errorf("unsupported auth method: %s", config.AuthMethod)
 	}
+}
+
+// applyDefaultConnectionParams applies default MongoDB connection parameters
+func applyDefaultConnectionParams(clientOpts *options.ClientOptions) {
+	// Set connection timeouts
+	connectTimeout := 30 * time.Second
+	serverSelectionTimeout := 30 * time.Second
+	
+	clientOpts.SetConnectTimeout(connectTimeout)
+	clientOpts.SetServerSelectionTimeout(serverSelectionTimeout)
+	
+	// Enable TLS
+	clientOpts.SetTLSConfig(nil) // Uses default TLS config
+	
+	// Enable retry for writes and reads
+	retryWrites := true
+	retryReads := true
+	clientOpts.SetRetryWrites(retryWrites)
+	clientOpts.SetRetryReads(retryReads)
 }
 
 // validateEntraConfig validates the Entra authentication configuration
