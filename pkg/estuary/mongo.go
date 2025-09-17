@@ -27,28 +27,90 @@ func NewMongoEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MongoEndp
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	
+	// Log configuration for debugging
+	logger.Debug().
+		Str("mongo_uri", streamConfig.MongoURI).
+		Str("host", streamConfig.Host).
+		Int("port", streamConfig.Port).
+		Str("auth_method", streamConfig.MongoAuthMethod).
+		Msg("Creating MongoDB endpoint with configuration")
+	
 	// Prepare auth config
 	authConfig := &auth.MongoAuthConfig{}
 	
 	// Use MongoURI if provided, otherwise build from individual components
 	if streamConfig.MongoURI != "" {
 		authConfig.ConnectionURI = streamConfig.MongoURI
+		logger.Debug().Str("uri", authConfig.ConnectionURI).Msg("Using provided MongoDB URI")
+	} else if streamConfig.Host != "" && streamConfig.Port > 0 {
+		// Build connection string from host/port - only use global config if available
+		if config.Global != nil && config.Global.DBUser != "" && config.Global.DBPasswd != "" {
+			authConfig.ConnectionURI = fmt.Sprintf("mongodb://%s:%s@%s:%d/admin", 
+				config.Global.DBUser, 
+				config.Global.DBPasswd, 
+				streamConfig.Host, 
+				streamConfig.Port)
+			logger.Debug().Str("host", streamConfig.Host).Int("port", streamConfig.Port).Msg("Using host/port with global credentials")
+		} else {
+			authConfig.ConnectionURI = fmt.Sprintf("mongodb://%s:%d/admin", 
+				streamConfig.Host, 
+				streamConfig.Port)
+			logger.Debug().Str("host", streamConfig.Host).Int("port", streamConfig.Port).Msg("Using host/port without credentials")
+		}
 	} else {
-		// Fallback to global config (legacy behavior)
-		authConfig.ConnectionURI = fmt.Sprintf("mongodb://%s:%s@%s:%d/admin", 
-			config.Global.DBUser, 
-			config.Global.DBPasswd, 
-			streamConfig.Host, 
-			streamConfig.Port)
+		logger.Error().
+			Str("mongo_uri", streamConfig.MongoURI).
+			Str("host", streamConfig.Host).
+			Int("port", streamConfig.Port).
+			Msg("MongoDB endpoint requires either MongoURI or Host/Port configuration")
+		panic("MongoDB endpoint configuration is invalid: missing URI or host/port")
 	}
 	
-	// TODO: Add Entra authentication support to WaterFlowsConfig
-	// For now, default to connection string authentication
+	// Set authentication method from config, default to connection string
 	authConfig.AuthMethod = "connection_string"
+	if streamConfig.MongoAuthMethod != "" {
+		authConfig.AuthMethod = streamConfig.MongoAuthMethod
+		logger.Debug().Str("auth_method", authConfig.AuthMethod).Msg("Using specified authentication method")
+	}
+	
+	// Set Entra authentication parameters if available
+	authConfig.TenantID = streamConfig.MongoTenantID
+	authConfig.ClientID = streamConfig.MongoClientID
+	authConfig.Scopes = streamConfig.MongoScopes
+	
+	// Log Entra configuration if using Entra authentication
+	if authConfig.AuthMethod == "entra" {
+		logger.Debug().
+			Str("tenant_id", authConfig.TenantID).
+			Str("client_id", authConfig.ClientID).
+			Strs("scopes", authConfig.Scopes).
+			Msg("Configured Entra authentication")
+	}
+	
+	// Parse refresh_before_expiry duration if provided
+	if streamConfig.MongoRefreshBeforeExpiry != "" {
+		if duration, err := time.ParseDuration(streamConfig.MongoRefreshBeforeExpiry); err == nil {
+			authConfig.RefreshBeforeExpiry = duration
+			logger.Debug().Dur("refresh_before_expiry", duration).Msg("Set token refresh timing")
+		} else {
+			logger.Warn().Err(err).Str("duration", streamConfig.MongoRefreshBeforeExpiry).Msg("Failed to parse refresh_before_expiry, using default")
+		}
+	}
+	
+	// Validate Entra configuration if using Entra authentication
+	if authConfig.AuthMethod == "entra" {
+		if len(authConfig.Scopes) == 0 {
+			logger.Error().Msg("Entra authentication requires at least one scope")
+			panic("Invalid Entra configuration: missing scopes")
+		}
+	}
 	
 	client, err := auth.NewMongoClientWithAuth(ctx, authConfig)
 	if err != nil {
-		logger.Error().Err(err).Msg("connection failure")
+		logger.Error().Err(err).
+			Str("uri", authConfig.ConnectionURI).
+			Str("auth_method", authConfig.AuthMethod).
+			Msg("connection failure")
 		panic(fmt.Sprintf("Failed to connect to MongoDB: %v", err))
 	}
 
