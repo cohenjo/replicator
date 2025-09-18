@@ -10,6 +10,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/rs/zerolog/log"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -86,8 +87,24 @@ func NewMongoClientWithAuth(ctx context.Context, config *MongoAuthConfig) (*mong
 	switch config.AuthMethod {
 	case "connection_string":
 		// Use connection string authentication (existing behavior)
-		// return mongo.Connect(ctx, clientOpts)
-		return nil, fmt.Errorf("connection string auth not implemented")
+		// Connect using the URI which should contain authentication credentials
+		log.Debug().Msg("Using connection string authentication")
+		client, err := mongo.Connect(clientOpts)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to connect to MongoDB with connection string")
+			return nil, fmt.Errorf("failed to connect to MongoDB with connection string auth: %w", err)
+		}
+		
+		log.Debug().Msg("MongoDB connection established, attempting ping...")
+		// Test the connection
+		if err := client.Ping(ctx, nil); err != nil {
+			log.Error().Err(err).Msg("MongoDB ping failed")
+			client.Disconnect(ctx)
+			return nil, fmt.Errorf("failed to ping MongoDB with connection string auth: %w", err)
+		}
+		log.Debug().Msg("MongoDB ping successful!")
+		
+		return client, nil
 		
 	case "entra":
 		// Validate Entra configuration
@@ -164,8 +181,8 @@ func validateEntraConfig(config *MongoAuthConfig) error {
 
 // connectWithEntraAuth establishes a MongoDB connection using Azure Entra authentication
 func connectWithEntraAuth(ctx context.Context, clientOpts *options.ClientOptions, config *MongoAuthConfig) (*mongo.Client, error) {
-	fmt.Printf("[DEBUG] Starting Entra authentication for MongoDB\n")
-	fmt.Printf("[DEBUG] Tenant ID: %s, Client ID: %s, Scopes: %v\n", config.TenantID, config.ClientID, config.Scopes)
+	log.Debug().Msg("Starting Entra authentication for MongoDB")
+	log.Debug().Str("tenant_id", config.TenantID).Str("client_id", config.ClientID).Interface("scopes", config.Scopes).Msg("Entra authentication config")
 
 	credential, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
@@ -194,14 +211,14 @@ func connectWithEntraAuth(ctx context.Context, clientOpts *options.ClientOptions
 		SetTLSConfig(&tls.Config{}).
 		SetAuth(auth)
 
-	fmt.Printf("[DEBUG] Attempting to connect to MongoDB...\n")
+	log.Debug().Msg("Attempting to connect to MongoDB...")
 	client, err := mongo.Connect(clientOptions)
 	if err != nil {
-		fmt.Printf("[ERROR] Failed to connect to MongoDB: %v\n", err)
+		log.Error().Err(err).Msg("Failed to connect to MongoDB")
 		return nil, fmt.Errorf("failed to connect to MongoDB with Entra auth: %w", err)
 	}
 
-	fmt.Println("Client created")
+	log.Debug().Msg("Client created")
 		
 	// // Initialize auth manager if needed
 	// if err := initAuthManager(config); err != nil {
@@ -230,15 +247,15 @@ func connectWithEntraAuth(ctx context.Context, clientOpts *options.ClientOptions
 	// 	fmt.Printf("[ERROR] Failed to connect to MongoDB: %v\n", err)
 	// 	return nil, fmt.Errorf("failed to connect to MongoDB with Entra auth: %w", err)
 	// }
-	fmt.Printf("[DEBUG] MongoDB connection established, attempting ping...\n")
+	log.Debug().Msg("MongoDB connection established, attempting ping...")
 	
 	// Test the connection
 	if err := client.Ping(ctx, nil); err != nil {
-		fmt.Printf("[ERROR] MongoDB ping failed: %v\n", err)
+		log.Error().Err(err).Msg("MongoDB ping failed")
 		client.Disconnect(ctx)
 		return nil, fmt.Errorf("failed to ping MongoDB with Entra auth: %w", err)
 	}
-	fmt.Printf("[DEBUG] MongoDB ping successful!\n")
+	log.Debug().Msg("MongoDB ping successful!")
 	
 	return client, nil
 }
@@ -248,7 +265,7 @@ func initAuthManager(config *MongoAuthConfig) error {
 	var initErr error
 	
 	authOnce.Do(func() {
-		fmt.Printf("[DEBUG] Initializing auth manager with NewDefaultAzureCredential\n")
+		log.Debug().Msg("Initializing auth manager with NewDefaultAzureCredential")
 		// Create Azure workload identity credential
 		cred, err := azidentity.NewDefaultAzureCredential(nil)
 		// cred, err := azidentity.NewWorkloadIdentityCredential(&azidentity.WorkloadIdentityCredentialOptions{
@@ -256,11 +273,11 @@ func initAuthManager(config *MongoAuthConfig) error {
 		// 	ClientID: config.ClientID,
 		// })
 		if err != nil {
-			fmt.Printf("[ERROR] Failed to create DefaultAzureCredential: %v\n", err)
+			log.Error().Err(err).Msg("Failed to create DefaultAzureCredential")
 			initErr = fmt.Errorf("failed to create workload identity credential: %w", err)
 			return
 		}
-		fmt.Printf("[DEBUG] DefaultAzureCredential created successfully\n")
+		log.Debug().Msg("DefaultAzureCredential created successfully")
 		
 		authManager = &mongoAuthManager{
 			credential:          cred,
@@ -268,7 +285,7 @@ func initAuthManager(config *MongoAuthConfig) error {
 			cache:               make(map[string]*tokenCacheEntry),
 			refreshBeforeExpiry: config.RefreshBeforeExpiry,
 		}
-		fmt.Printf("[DEBUG] Auth manager initialized with scopes: %v, refresh buffer: %v\n", config.Scopes, config.RefreshBeforeExpiry)
+		log.Debug().Interface("scopes", config.Scopes).Dur("refresh_buffer", config.RefreshBeforeExpiry).Msg("Auth manager initialized")
 	})
 	
 	return initErr
@@ -277,37 +294,36 @@ func initAuthManager(config *MongoAuthConfig) error {
 // createOIDCMachineCallback creates the OIDC machine callback for MongoDB authentication
 func createOIDCMachineCallback(tenantID string, scopes []string) func(context.Context, *options.OIDCArgs) (*options.OIDCCredential, error) {
 	return func(ctx context.Context, args *options.OIDCArgs) (*options.OIDCCredential, error) {
-		fmt.Printf("[DEBUG] OIDC callback invoked by MongoDB driver\n")
-		fmt.Printf("[DEBUG] Request context: timeout=%v\n", ctx)
+		log.Debug().Msg("OIDC callback invoked by MongoDB driver")
+		log.Debug().Interface("context", ctx).Msg("Request context")
 		
 		if authManager == nil {
-			fmt.Printf("[ERROR] Auth manager not initialized\n")
+			log.Error().Msg("Auth manager not initialized")
 			return nil, fmt.Errorf("auth manager not initialized")
 		}
 		
 		// Create cache key based on tenant and scopes
 		cacheKey := fmt.Sprintf("%s:%v", tenantID, scopes)
-		fmt.Printf("[DEBUG] Using cache key: %s\n", cacheKey)
+		log.Debug().Str("cache_key", cacheKey).Msg("Using cache key")
 		
 		// Use singleflight to prevent concurrent token requests
-		fmt.Printf("[DEBUG] Requesting token via singleflight...\n")
+		log.Debug().Msg("Requesting token via singleflight...")
 		tokenInterface, err, _ := authManager.group.Do(cacheKey, func() (interface{}, error) {
 			return authManager.getOrRefreshToken(ctx, cacheKey, scopes)
 		})
 		
 		if err != nil {
-			fmt.Printf("[ERROR] Failed to get access token: %v\n", err)
+			log.Error().Err(err).Msg("Failed to get access token")
 			return nil, fmt.Errorf("failed to get access token: %w", err)
 		}
 		
 		token, ok := tokenInterface.(azcore.AccessToken)
 		if !ok {
-			fmt.Printf("[ERROR] Invalid token type received\n")
+			log.Error().Msg("Invalid token type received")
 			return nil, fmt.Errorf("invalid token type")
 		}
 		
-		fmt.Printf("[DEBUG] Token acquired successfully, expires at: %v\n", token.ExpiresOn)
-		fmt.Printf("[DEBUG] Token length: %d characters\n", len(token.Token))
+		log.Debug().Time("expires_at", token.ExpiresOn).Int("token_length", len(token.Token)).Msg("Token acquired successfully")
 		
 		return &options.OIDCCredential{
 			AccessToken: token.Token,
@@ -318,7 +334,7 @@ func createOIDCMachineCallback(tenantID string, scopes []string) func(context.Co
 
 // getOrRefreshToken gets a cached token or refreshes it if expired/near expiry
 func (m *mongoAuthManager) getOrRefreshToken(ctx context.Context, cacheKey string, scopes []string) (azcore.AccessToken, error) {
-	fmt.Printf("[DEBUG] getOrRefreshToken called for cache key: %s\n", cacheKey)
+	log.Debug().Str("cache_key", cacheKey).Msg("getOrRefreshToken called")
 	
 	m.cacheMutex.RLock()
 	entry, exists := m.cache[cacheKey]
@@ -326,7 +342,7 @@ func (m *mongoAuthManager) getOrRefreshToken(ctx context.Context, cacheKey strin
 	
 	// Check if we have a valid cached token
 	if exists {
-		fmt.Printf("[DEBUG] Found cached token entry\n")
+		log.Debug().Msg("Found cached token entry")
 		entry.mutex.RLock()
 		token := entry.token
 		expiresAt := entry.expiresAt
@@ -334,34 +350,34 @@ func (m *mongoAuthManager) getOrRefreshToken(ctx context.Context, cacheKey strin
 		
 		// Return cached token if it's still valid and not close to expiry
 		if time.Now().Add(m.refreshBeforeExpiry).Before(expiresAt) {
-			fmt.Printf("[DEBUG] Using cached token (expires at: %v)\n", expiresAt)
+			log.Debug().Time("expires_at", expiresAt).Msg("Using cached token")
 			return token, nil
 		}
-		fmt.Printf("[DEBUG] Cached token is expired or near expiry, refreshing...\n")
+		log.Debug().Msg("Cached token is expired or near expiry, refreshing...")
 	} else {
-		fmt.Printf("[DEBUG] No cached token found, acquiring new token\n")
+		log.Debug().Msg("No cached token found, acquiring new token")
 	}
 	
 	// Get new token from Azure
-	fmt.Printf("[DEBUG] Requesting new token from Azure with scopes: %v\n", scopes)
+	log.Debug().Interface("scopes", scopes).Msg("Requesting new token from Azure")
 	token, err := m.credential.GetToken(ctx, policy.TokenRequestOptions{
 		Scopes: scopes,
 	})
 	if err != nil {
-		fmt.Printf("[ERROR] Failed to get token from Azure: %v\n", err)
+		log.Error().Err(err).Msg("Failed to get token from Azure")
 		return azcore.AccessToken{}, fmt.Errorf("failed to get token from Azure: %w", err)
 	}
 	
-	fmt.Printf("[DEBUG] Successfully acquired new token from Azure (expires: %v)\n", token.ExpiresOn)
+	log.Debug().Time("expires", token.ExpiresOn).Msg("Successfully acquired new token from Azure")
 	
 	// Cache the new token
 	m.cacheMutex.Lock()
 	if entry == nil {
 		entry = &tokenCacheEntry{}
 		m.cache[cacheKey] = entry
-		fmt.Printf("[DEBUG] Created new cache entry\n")
+		log.Debug().Msg("Created new cache entry")
 	} else {
-		fmt.Printf("[DEBUG] Updated existing cache entry\n")
+		log.Debug().Msg("Updated existing cache entry")
 	}
 	m.cacheMutex.Unlock()
 	
@@ -370,7 +386,7 @@ func (m *mongoAuthManager) getOrRefreshToken(ctx context.Context, cacheKey strin
 	entry.expiresAt = token.ExpiresOn
 	entry.mutex.Unlock()
 	
-	fmt.Printf("[DEBUG] Token cached successfully\n")
+	log.Debug().Msg("Token cached successfully")
 	return token, nil
 }
 
