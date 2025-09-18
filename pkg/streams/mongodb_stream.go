@@ -15,7 +15,18 @@ import (
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/cohenjo/replicator/pkg/models"
+	"github.com/cohenjo/replicator/pkg/metrics"
 )
+
+// Recovery mode constants for document acquisition
+const (
+	recoveryModeNormal   = "normal"
+	recoveryModeFallback = "fallback"
+	recoveryModeEmpty    = "empty"
+)
+
+// Pre-allocated empty JSON object to reduce allocations
+var emptyDocJSON = []byte("{}")
 
 // MongoDBStream implements the models.Stream interface for MongoDB replication
 type MongoDBStream struct {
@@ -29,6 +40,7 @@ type MongoDBStream struct {
 	mu           sync.RWMutex
 	ctx          context.Context
 	cancel       context.CancelFunc
+	telemetry    *metrics.TelemetryManager
 }
 
 // NewMongoDBStream creates a new MongoDB stream instance
@@ -390,66 +402,20 @@ func (s *MongoDBStream) processEvents() {
 func (s *MongoDBStream) processChangeEvent(changeEvent bson.M) error {
 // Extract basic event information
 operationType, _ := changeEvent["operationType"].(string)
+collection := s.getCollectionFromEvent(changeEvent)
 
-// Extract full document using robust type handling
-fullDocument, err := s.extractFullDocument(changeEvent)
+// Acquire document with recovery mode tracking
+fullDocument, recoveryMode, err := s.acquireDocument(changeEvent)
 if err != nil {
 log.Error().Err(err).
 Str("stream", s.config.Name).
 Str("operation", operationType).
-Msg("Failed to extract full document")
+Str("collection", collection).
+Msg("Failed to acquire document")
 s.mu.Lock()
 s.metrics.ErrorCount++
 s.mu.Unlock()
 return err
-}
-
-// Handle missing fullDocument for actionable operations
-isActionableOp := operationType == "insert" || operationType == "replace"
-if fullDocument == nil && isActionableOp {
-// Log diagnostic information
-eventKeys := make([]string, 0, len(changeEvent))
-for k := range changeEvent {
-eventKeys = append(eventKeys, k)
-}
-
-hasDocumentKey := false
-if _, exists := changeEvent["documentKey"]; exists {
-hasDocumentKey = true
-}
-
-log.Error().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Strs("event_keys", eventKeys).
-Bool("has_document_key", hasDocumentKey).
-Msg("Missing fullDocument for actionable operation")
-
-// Attempt fallback fetch if documentKey is present
-if hasDocumentKey {
-log.Debug().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Msg("Attempting fallback document fetch")
-
-fallbackDoc, fallbackErr := s.fallbackFetchDocument(changeEvent)
-if fallbackErr != nil {
-log.Error().Err(fallbackErr).
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Msg("Fallback document fetch failed")
-s.mu.Lock()
-s.metrics.ErrorCount++
-s.mu.Unlock()
-// Continue with empty data rather than failing completely
-} else {
-fullDocument = fallbackDoc
-log.Info().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Msg("Successfully recovered document using fallback fetch")
-}
-}
 }
 
 // Convert full document to JSON bytes
@@ -457,53 +423,52 @@ var data []byte
 if fullDocument != nil {
 data, err = bson.MarshalExtJSON(fullDocument, true, false)
 if err != nil {
-log.Error().Err(err).Str("stream", s.config.Name).Msg("Failed to marshal full document")
+log.Error().Err(err).
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Str("collection", collection).
+Msg("Failed to marshal document")
 s.mu.Lock()
 s.metrics.ErrorCount++
 s.mu.Unlock()
 return err
 }
-} else if isActionableOp {
-// For actionable operations with missing data, use empty JSON object to prevent downstream errors
-data = []byte("{}")
-log.Warn().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Msg("Using empty JSON object for missing fullDocument")
+} else if recoveryMode == recoveryModeEmpty {
+// Use pre-allocated empty JSON object
+data = emptyDocJSON
 }
 
-// Always log data size for verification (especially when zero)
-dataSize := len(data)
-logLevel := log.Debug()
-if dataSize == 0 && isActionableOp {
-logLevel = log.Warn()
+// Record recovery mode metrics if telemetry is available
+if s.telemetry != nil {
+s.telemetry.RecordMongoRecoveryMode(s.ctx, s.config.Name, operationType, recoveryMode)
 }
 
-logLevel.
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Int("data_size", dataSize).
-Msg("Event processed")
+// Single consolidated log entry for the processed event
+log.Debug().
+	Str("stream", s.config.Name).
+	Str("operation", operationType).
+	Str("collection", collection).
+	Int("data_size", len(data)).
+	Str("recovery_mode", recoveryMode).
+	Msg("mongo change event processed")
 
 // Create replication event using the existing RecordEvent structure
 recordEvent := events.RecordEvent{
 Action:     operationType,
 Schema:     s.config.Source.Database,
-Collection: s.getCollectionFromEvent(changeEvent),
+Collection: collection,
 Data:       data,
 }
 
 // Send to event channel (non-blocking)
 select {
 case s.eventChannel <- recordEvent:
-log.Debug().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Int("data_size", len(data)).
-Msg("Event sent to processing pipeline")
+// Event sent successfully - no additional logging needed
 default:
 log.Warn().
 Str("stream", s.config.Name).
+Str("operation", operationType).
+Str("collection", collection).
 Msg("Event channel full, dropping event")
 s.mu.Lock()
 s.metrics.ErrorCount++
@@ -511,6 +476,67 @@ s.mu.Unlock()
 }
 
 return nil
+}
+
+// acquireDocument attempts to acquire the document for a change event with fallback logic
+func (s *MongoDBStream) acquireDocument(changeEvent bson.M) (bson.M, string, error) {
+	operationType, _ := changeEvent["operationType"].(string)
+	isActionableOp := operationType == "insert" || operationType == "replace"
+
+	// Try primary extraction first
+	fullDocument, err := s.extractFullDocument(changeEvent)
+	if err != nil {
+	return nil, "", fmt.Errorf("document extraction failed: %w", err)
+	}
+
+	// If document found, return with normal mode
+	if fullDocument != nil {
+	return fullDocument, recoveryModeNormal, nil
+	}
+
+	// For non-actionable operations, missing document is expected
+	if !isActionableOp {
+	return nil, recoveryModeNormal, nil
+	}
+
+	// For actionable operations, attempt fallback if documentKey present
+	if documentKey, hasKey := changeEvent["documentKey"]; hasKey && documentKey != nil {
+		log.Debug().
+			Str("stream", s.config.Name).
+			Str("operation", operationType).
+			Msg("Attempting fallback document fetch")
+
+		fallbackDoc, fallbackErr := s.fallbackFetchDocument(changeEvent)
+		if fallbackErr != nil {
+			log.Error().Err(fallbackErr).
+				Str("stream", s.config.Name).
+				Str("operation", operationType).
+				Msg("Fallback document fetch failed")
+			s.mu.Lock()
+			s.metrics.ErrorCount++
+			s.mu.Unlock()
+		// Fall through to empty mode
+		} else {
+		log.Info().
+			Str("stream", s.config.Name).
+			Str("operation", operationType).
+			Msg("Successfully recovered document using fallback fetch")
+		return fallbackDoc, recoveryModeFallback, nil
+		}
+	} else {
+		log.Warn().
+			Str("stream", s.config.Name).
+			Str("operation", operationType).
+			Msg("Missing fullDocument and documentKey for actionable operation")
+	}
+
+	// Last resort: return nil with empty mode (will use emptyDocJSON)
+	log.Warn().
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Msg("Using empty document for missing fullDocument")
+
+	return nil, recoveryModeEmpty, nil
 }
 
 // getCollectionFromEvent extracts collection name from change event
