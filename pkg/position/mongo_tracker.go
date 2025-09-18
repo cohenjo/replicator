@@ -184,9 +184,8 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 			return nil, fmt.Errorf("tenant ID must be valid UUID format")
 		}
 		
-		if config.ClientID == "" {
-			return nil, fmt.Errorf("client_id is required for Entra authentication")
-		}
+		// ClientID is optional for system-assigned managed identity; only required for user-assigned identity or service principal.
+		// If your logic requires distinguishing, add further checks here.
 		
 		// Validate scopes for Azure Cosmos DB
 		validScope := false
