@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/replicator"
@@ -26,6 +27,7 @@ func main() {
 		showVersion   = flag.Bool("version", false, "Show version information")
 		showConfig    = flag.Bool("show-config", false, "Show configuration and exit")
 		validateOnly  = flag.Bool("validate", false, "Validate configuration and exit")
+		sleep         = flag.Bool("sleep", false, "Sleep for a duration (for testing purposes)")
 		generateConfig = flag.String("generate-config", "", "Generate configuration template to file")
 	)
 	flag.Parse()
@@ -84,6 +86,12 @@ func main() {
 	if *validateOnly {
 		logger.Info("Configuration validation passed")
 		os.Exit(0)
+	}
+
+	// Sleep for a duration and exit if requested
+	if *sleep {
+		logger.Info("Sleep for 60 minutes, continuing...")
+		time.Sleep(60 * time.Minute)
 	}
 
 	// Run the application
@@ -154,9 +162,9 @@ func showConfiguration(cfg *config.Config, logger *logrus.Logger) {
 	if cfg.Server.TLS != nil {
 		fmt.Printf("    TLS Enabled: %t\n", cfg.Server.TLS.Enabled)
 	}
-	fmt.Printf("  Metrics:\n")
-	fmt.Printf("    Enabled: %t\n", cfg.Metrics.Enabled)
-	fmt.Printf("    Port: %d\n", cfg.Metrics.Port)
+	fmt.Printf("  Telemetry:\n")
+	fmt.Printf("    Enabled: %t\n", cfg.Telemetry.Enabled)
+	fmt.Printf("    Metrics Enabled: %t\n", cfg.Telemetry.Metrics.Enabled)
 	fmt.Printf("  Azure Authentication: %s\n", cfg.Azure.Authentication.Method)
 	fmt.Printf("  Streams: %d configured\n", len(cfg.Streams))
 

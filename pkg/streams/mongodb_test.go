@@ -5,8 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 

@@ -15,17 +15,26 @@ func (tm *TelemetryManager) RecordHTTPRequest(method, path string, statusCode in
 	// TODO: Implement actual HTTP request metrics recording
 }
 
-// RecordMetrics records general metrics (stub implementation)
+// RecordMetrics records arbitrary metrics (for backward compatibility)
 func (tm *TelemetryManager) RecordMetrics(ctx context.Context, metrics map[string]interface{}) {
-	// TODO: Implement actual metrics recording
+	// This method is kept for backward compatibility
+	// In practice, specific metric recording methods should be preferred
 }
 
-// IncrementCounter increments a named counter by a value (stub implementation)
-func (tm *TelemetryManager) IncrementCounter(name string, value int) {
-	// TODO: Implement actual counter increment
+// IncrementCounter increments a named counter (for backward compatibility)
+func (tm *TelemetryManager) IncrementCounter(name string, value int64) {
+	if !tm.config.Metrics.Enabled {
+		return
+	}
+	
+	ctx := context.Background()
+	if counter, exists := tm.counters[name]; exists {
+		counter.Add(ctx, value)
+	}
 }
 
-// SetGauge sets a gauge value with labels (stub implementation)
+// SetGauge sets a gauge value (placeholder - gauges in this implementation are observable)
 func (tm *TelemetryManager) SetGauge(name string, value float64, labels map[string]string) {
-	// TODO: Implement actual gauge setting
+	// Observable gauges are updated via callbacks, not directly set
+	// This method is kept for backward compatibility with existing code
 }

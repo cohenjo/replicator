@@ -330,27 +330,6 @@ func ValidateAuthenticationConfig(cfg *AuthenticationConfig) error {
 	return nil
 }
 
-// CreateDefaultConfig creates a new configuration with default values
-func CreateDefaultConfig() *Config {
-	return &Config{
-		Server: ServerConfig{
-			Host: "0.0.0.0",
-			Port: 8080,
-		},
-		Metrics: MetricsConfig{
-			Enabled: true,
-			Port:    9090,
-			Path:    "/metrics",
-		},
-		Logging: LoggingConfig{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
-		},
-		Streams: []StreamConfig{},
-	}
-}
-
 // ToYAML serializes the config to YAML
 func ToYAML(cfg *Config) ([]byte, error) {
 	return nil, fmt.Errorf("YAML serialization not implemented yet")

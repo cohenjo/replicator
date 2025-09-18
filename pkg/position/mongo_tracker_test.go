@@ -552,3 +552,149 @@ func TestNewTracker_MongoDB(t *testing.T) {
 	assert.NotNil(t, tracker2)
 	assert.IsType(t, &MongoTracker{}, tracker2)
 }
+
+// TestMongoConfig_EntraAuthValidation tests Entra authentication configuration validation
+func TestMongoConfig_EntraAuthValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		config      *MongoConfig
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "valid_entra_auth_config",
+			config: &MongoConfig{
+				ConnectionURI: "mongodb://cosmos-test.mongo.cosmos.azure.com:10255/",
+				Database:      "test_db",
+				AuthMethod:    "entra",
+				TenantID:      "12345678-1234-1234-1234-123456789012",
+				ClientID:      "87654321-4321-4321-4321-210987654321",
+				Scopes:        []string{"https://cosmos.azure.com/.default"},
+			},
+			expectError: false,
+		},
+		{
+			name: "valid_entra_auth_system_identity",
+			config: &MongoConfig{
+				ConnectionURI: "mongodb://cosmos-test.mongo.cosmos.azure.com:10255/",
+				Database:      "test_db",
+				AuthMethod:    "entra",
+				TenantID:      "12345678-1234-1234-1234-123456789012",
+				Scopes:        []string{"https://cosmos.azure.com/.default"},
+			},
+			expectError: false,
+		},
+		{
+			name: "entra_auth_missing_tenant_id",
+			config: &MongoConfig{
+				ConnectionURI: "mongodb://cosmos-test.mongo.cosmos.azure.com:10255/",
+				Database:      "test_db",
+				AuthMethod:    "entra",
+				Scopes:        []string{"https://cosmos.azure.com/.default"},
+			},
+			expectError: true,
+			errorMsg:    "tenant ID is required for Entra authentication",
+		},
+		{
+			name: "entra_auth_invalid_scope_postgres",
+			config: &MongoConfig{
+				ConnectionURI: "mongodb://cosmos-test.mongo.cosmos.azure.com:10255/",
+				Database:      "test_db",
+				AuthMethod:    "entra",
+				TenantID:      "12345678-1234-1234-1234-123456789012",
+				ClientID:      "87654321-4321-4321-4321-210987654321",
+				Scopes:        []string{"https://ossrdbms-aad.database.windows.net/.default"},
+			},
+			expectError: true,
+			errorMsg:    "invalid scope for Azure Cosmos DB",
+		},
+		{
+			name: "entra_auth_invalid_tenant_format",
+			config: &MongoConfig{
+				ConnectionURI: "mongodb://cosmos-test.mongo.cosmos.azure.com:10255/",
+				Database:      "test_db",
+				AuthMethod:    "entra",
+				TenantID:      "invalid-tenant-id",
+				ClientID:      "87654321-4321-4321-4321-210987654321",
+				Scopes:        []string{"https://cosmos.azure.com/.default"},
+			},
+			expectError: true,
+			errorMsg:    "tenant ID must be valid UUID format",
+		},
+		{
+			name: "entra_auth_with_credentials_in_uri",
+			config: &MongoConfig{
+				ConnectionURI: "mongodb://user:pass@cosmos-test.mongo.cosmos.azure.com:10255/",
+				Database:      "test_db",
+				AuthMethod:    "entra",
+				TenantID:      "12345678-1234-1234-1234-123456789012",
+				ClientID:      "87654321-4321-4321-4321-210987654321",
+				Scopes:        []string{"https://cosmos.azure.com/.default"},
+			},
+			expectError: true,
+			errorMsg:    "connection URI must not contain credentials when using Entra authentication",
+		},
+		{
+			name: "default_auth_method_connection_string",
+			config: &MongoConfig{
+				ConnectionURI: "mongodb://user:pass@localhost:27017/",
+				Database:      "test_db",
+				// AuthMethod not specified - should default to "connection_string"
+			},
+			expectError: false,
+		},
+		{
+			name: "invalid_auth_method",
+			config: &MongoConfig{
+				ConnectionURI: "mongodb://localhost:27017/",
+				Database:      "test_db",
+				AuthMethod:    "invalid_method",
+			},
+			expectError: true,
+			errorMsg:    "auth method must be 'connection_string' or 'entra'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewMongoTracker(tt.config)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.errorMsg != "" {
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestNewMongoTracker_EntraAuth tests creating a tracker with Entra authentication
+func TestNewMongoTracker_EntraAuth(t *testing.T) {
+	config := &MongoConfig{
+		ConnectionURI: "mongodb://cosmos-test.mongo.cosmos.azure.com:10255/",
+		Database:      "test_db",
+		Collection:    "test_collection",
+		AuthMethod:    "entra",
+		TenantID:      "12345678-1234-1234-1234-123456789012",
+		ClientID:      "87654321-4321-4321-4321-210987654321",
+		Scopes:        []string{"https://cosmos.azure.com/.default"},
+	}
+
+	// This should fail until we implement Entra auth support
+	tracker, err := NewMongoTracker(config)
+	
+	// For now, we expect this to work with the new config fields
+	// but it will fail when trying to use Entra auth until we implement it
+	require.NoError(t, err)
+	require.NotNil(t, tracker)
+	
+	// The actual authentication will fail until we implement the Entra client creation
+	defer func() {
+		if tracker != nil {
+			tracker.Close()
+		}
+	}()
+}

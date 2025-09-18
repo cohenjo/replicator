@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readconcern"
-	"go.mongodb.org/mongo-driver/mongo/writeconcern"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
 
 // MongoTracker implements position tracking using MongoDB
@@ -70,6 +71,18 @@ type MongoConfig struct {
 	
 	// Compressors for network compression (zlib, zstd, snappy)
 	Compressors []string `json:"compressors,omitempty" yaml:"compressors,omitempty"`
+	
+	// AuthMethod specifies the authentication method: "connection_string" or "entra"
+	AuthMethod string `json:"auth_method,omitempty" yaml:"auth_method,omitempty"`
+	
+	// TenantID for Azure Entra authentication
+	TenantID string `json:"tenant_id,omitempty" yaml:"tenant_id,omitempty"`
+	
+	// ClientID for Azure Entra authentication
+	ClientID string `json:"client_id,omitempty" yaml:"client_id,omitempty"`
+	
+	// Scopes for Azure Entra authentication (defaults to https://cosmos.azure.com/.default)
+	Scopes []string `json:"scopes,omitempty" yaml:"scopes,omitempty"`
 }
 
 // MongoWriteConcern configuration for write operations
@@ -113,6 +126,15 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 		config.Collection = "stream_positions"
 	}
 	
+	// Validate authentication method
+	if config.AuthMethod == "" {
+		config.AuthMethod = "connection_string"
+	}
+	
+	if config.AuthMethod != "connection_string" && config.AuthMethod != "entra" {
+		return nil, fmt.Errorf("auth method must be 'connection_string' or 'entra'")
+	}
+	
 	// Set defaults
 	if config.ConnectTimeout == 0 {
 		config.ConnectTimeout = 10 * time.Second
@@ -143,6 +165,53 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 			W:        "majority",
 			J:        true,
 			WTimeout: 5 * time.Second,
+		}
+	}
+	
+	// Set Entra authentication defaults and validation
+	if config.AuthMethod == "entra" {
+		if len(config.Scopes) == 0 {
+			config.Scopes = []string{"https://cosmos.azure.com/.default"}
+		}
+		
+		// Validate required Entra fields
+		if config.TenantID == "" {
+			return nil, fmt.Errorf("tenant ID is required for Entra authentication")
+		}
+		
+		// Validate tenant ID format (should be UUID)
+		if len(config.TenantID) != 36 || config.TenantID[8] != '-' || config.TenantID[13] != '-' {
+			return nil, fmt.Errorf("tenant ID must be valid UUID format")
+		}
+		
+		// ClientID is optional for system-assigned managed identity; only required for user-assigned identity or service principal.
+		// If your logic requires distinguishing, add further checks here.
+		
+		// Validate scopes for Azure Cosmos DB
+		validScope := false
+		for _, scope := range config.Scopes {
+			if scope == "https://cosmos.azure.com/.default" {
+				validScope = true
+				break
+			}
+		}
+		if !validScope {
+			return nil, fmt.Errorf("invalid scope for Azure Cosmos DB, must include 'https://cosmos.azure.com/.default'")
+		}
+		
+		// Check that connection URI doesn't contain credentials when using Entra
+		if strings.Contains(config.ConnectionURI, "://") {
+			uriParts := strings.SplitN(config.ConnectionURI, "://", 2)
+			if len(uriParts) == 2 {
+				hostPart := uriParts[1]
+				// Check for credentials pattern: username:password@host
+				if strings.Contains(hostPart, "@") {
+					beforeAt := strings.SplitN(hostPart, "@", 2)[0]
+					if strings.Contains(beforeAt, ":") {
+						return nil, fmt.Errorf("connection URI must not contain credentials when using Entra authentication")
+					}
+				}
+			}
 		}
 	}
 	

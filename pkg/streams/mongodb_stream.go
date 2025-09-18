@@ -6,15 +6,27 @@ import (
 	"sync"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"github.com/rs/zerolog/log"
 
+	"github.com/cohenjo/replicator/pkg/auth"
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/cohenjo/replicator/pkg/models"
+	"github.com/cohenjo/replicator/pkg/metrics"
 )
+
+// Recovery mode constants for document acquisition
+const (
+	recoveryModeNormal   = "normal"
+	recoveryModeFallback = "fallback"
+	recoveryModeEmpty    = "empty"
+)
+
+// Pre-allocated empty JSON object to reduce allocations
+var emptyDocJSON = []byte("{}")
 
 // MongoDBStream implements the models.Stream interface for MongoDB replication
 type MongoDBStream struct {
@@ -28,6 +40,7 @@ type MongoDBStream struct {
 	mu           sync.RWMutex
 	ctx          context.Context
 	cancel       context.CancelFunc
+	telemetry    *metrics.TelemetryManager
 }
 
 // NewMongoDBStream creates a new MongoDB stream instance
@@ -72,6 +85,7 @@ func (s *MongoDBStream) Start(ctx context.Context) error {
 		s.state.LastError = &lastError
 		return fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
+	log.Info().Str("stream", s.config.Name).Msg("Connected to MongoDB")
 
 	// Create change stream
 	if err := s.createChangeStream(); err != nil {
@@ -80,6 +94,7 @@ func (s *MongoDBStream) Start(ctx context.Context) error {
 		s.state.LastError = &lastError
 		return fmt.Errorf("failed to create change stream: %w", err)
 	}
+	log.Info().Str("stream", s.config.Name).Msg("Change stream created")
 
 	// Update state
 	s.state.Status = config.StreamStatusRunning
@@ -89,6 +104,7 @@ func (s *MongoDBStream) Start(ctx context.Context) error {
 	s.metrics.LastProcessedTime = time.Now()
 
 	// Start processing events in background
+	log.Info().Str("stream", s.config.Name).Msg("Starting event processing")
 	go s.processEvents()
 
 	log.Info().Str("stream", s.config.Name).Msg("MongoDB stream started successfully")
@@ -209,12 +225,14 @@ func (s *MongoDBStream) GetCheckpoint() (map[string]interface{}, error) {
 	return make(map[string]interface{}), nil
 }
 
-// connect establishes connection to MongoDB
+// connect establishes connection to MongoDB using shared authentication
 func (s *MongoDBStream) connect() error {
+	// Build auth config from stream config
+	authConfig := &auth.MongoAuthConfig{}
+	
 	// Use URI if provided, otherwise build connection string
-	var connectionString string
 	if s.config.Source.URI != "" {
-		connectionString = s.config.Source.URI
+		authConfig.ConnectionURI = s.config.Source.URI
 	} else {
 		// Build connection string from individual components
 		// For MongoDB, authentication should be against admin database
@@ -225,7 +243,7 @@ func (s *MongoDBStream) connect() error {
 			}
 		}
 		
-		connectionString = fmt.Sprintf("mongodb://%s:%s@%s:%d/%s?authSource=%s",
+		authConfig.ConnectionURI = fmt.Sprintf("mongodb://%s:%s@%s:%d/%s?authSource=%s",
 			s.config.Source.Username,
 			s.config.Source.Password,
 			s.config.Source.Host,
@@ -234,23 +252,53 @@ func (s *MongoDBStream) connect() error {
 			authDB,
 		)
 	}
-
-	// Create client options
-	clientOptions := options.Client().ApplyURI(connectionString)
-
-	// Connect to MongoDB
-	client, err := mongo.Connect(s.ctx, clientOptions)
+	
+	// Check for Entra authentication options
+	if s.config.Source.Options != nil {
+		if authMethod, ok := s.config.Source.Options["auth_method"].(string); ok {
+			authConfig.AuthMethod = authMethod
+		}
+		
+		if tenantID, ok := s.config.Source.Options["tenant_id"].(string); ok {
+			authConfig.TenantID = tenantID
+		}
+		
+		if clientID, ok := s.config.Source.Options["client_id"].(string); ok {
+			authConfig.ClientID = clientID
+		}
+		
+		if scopes, ok := s.config.Source.Options["scopes"].([]string); ok {
+			authConfig.Scopes = scopes
+		} else if scopesInterface, ok := s.config.Source.Options["scopes"].([]interface{}); ok {
+			// Handle case where scopes come from YAML as []interface{}
+			for _, scope := range scopesInterface {
+				if scopeStr, ok := scope.(string); ok {
+					authConfig.Scopes = append(authConfig.Scopes, scopeStr)
+				}
+			}
+		}
+		
+		if refreshBefore, ok := s.config.Source.Options["refresh_before_expiry"].(time.Duration); ok {
+			authConfig.RefreshBeforeExpiry = refreshBefore
+		}
+	}
+	
+	// Default to connection string auth if not specified
+	if authConfig.AuthMethod == "" {
+		authConfig.AuthMethod = "connection_string"
+	}
+	
+	// Connect using shared auth function
+	client, err := auth.NewMongoClientWithAuth(s.ctx, authConfig)
 	if err != nil {
 		return fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
 
-	// Test the connection
-	if err := client.Ping(s.ctx, nil); err != nil {
-		return fmt.Errorf("failed to ping MongoDB: %w", err)
-	}
-
 	s.client = client
-	log.Info().Str("stream", s.config.Name).Msg("Connected to MongoDB")
+	log.Info().
+		Str("stream", s.config.Name).
+		Str("auth_method", authConfig.AuthMethod).
+		Msg("Connected to MongoDB")
 	return nil
 }
 
@@ -267,10 +315,12 @@ func (s *MongoDBStream) createChangeStream() error {
 
 	if collection := s.getCollectionFromConfig(); collection != "" {
 		// Watch specific collection
+		log.Info().Str("stream", s.config.Name).Str("collection", collection).Str("database", s.config.Source.Database).Msg("Watching specific collection")
 		coll := database.Collection(collection)
 		changeStream, err = coll.Watch(s.ctx, pipeline, options)
 	} else {
 		// Watch entire database
+		log.Info().Str("stream", s.config.Name).Str("database", s.config.Source.Database).Msg("Watching entire database")
 		changeStream, err = database.Watch(s.ctx, pipeline, options)
 	}
 
@@ -350,46 +400,143 @@ func (s *MongoDBStream) processEvents() {
 
 // processChangeEvent processes a single change event
 func (s *MongoDBStream) processChangeEvent(changeEvent bson.M) error {
-	// Extract basic event information
+// Extract basic event information
+operationType, _ := changeEvent["operationType"].(string)
+collection := s.getCollectionFromEvent(changeEvent)
+
+// Acquire document with recovery mode tracking
+fullDocument, recoveryMode, err := s.acquireDocument(changeEvent)
+if err != nil {
+log.Error().Err(err).
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Str("collection", collection).
+Msg("Failed to acquire document")
+s.mu.Lock()
+s.metrics.ErrorCount++
+s.mu.Unlock()
+return err
+}
+
+// Convert full document to JSON bytes
+var data []byte
+if fullDocument != nil {
+data, err = bson.MarshalExtJSON(fullDocument, true, false)
+if err != nil {
+log.Error().Err(err).
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Str("collection", collection).
+Msg("Failed to marshal document")
+s.mu.Lock()
+s.metrics.ErrorCount++
+s.mu.Unlock()
+return err
+}
+} else if recoveryMode == recoveryModeEmpty {
+// Use pre-allocated empty JSON object
+data = emptyDocJSON
+}
+
+// Record recovery mode metrics if telemetry is available
+if s.telemetry != nil {
+s.telemetry.RecordMongoRecoveryMode(s.ctx, s.config.Name, operationType, recoveryMode)
+}
+
+// Single consolidated log entry for the processed event
+log.Debug().
+	Str("stream", s.config.Name).
+	Str("operation", operationType).
+	Str("collection", collection).
+	Int("data_size", len(data)).
+	Str("recovery_mode", recoveryMode).
+	Msg("mongo change event processed")
+
+// Create replication event using the existing RecordEvent structure
+recordEvent := events.RecordEvent{
+Action:     operationType,
+Schema:     s.config.Source.Database,
+Collection: collection,
+Data:       data,
+}
+
+// Send to event channel (non-blocking)
+select {
+case s.eventChannel <- recordEvent:
+// Event sent successfully - no additional logging needed
+default:
+log.Warn().
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Str("collection", collection).
+Msg("Event channel full, dropping event")
+s.mu.Lock()
+s.metrics.ErrorCount++
+s.mu.Unlock()
+}
+
+return nil
+}
+
+// acquireDocument attempts to acquire the document for a change event with fallback logic
+func (s *MongoDBStream) acquireDocument(changeEvent bson.M) (bson.M, string, error) {
 	operationType, _ := changeEvent["operationType"].(string)
-	fullDocument, _ := changeEvent["fullDocument"].(bson.M)
+	isActionableOp := operationType == "insert" || operationType == "replace"
 
-	// Convert full document to JSON bytes
-	var data []byte
-	var err error
+	// Try primary extraction first
+	fullDocument, err := s.extractFullDocument(changeEvent)
+	if err != nil {
+	return nil, "", fmt.Errorf("document extraction failed: %w", err)
+	}
+
+	// If document found, return with normal mode
 	if fullDocument != nil {
-		data, err = bson.MarshalExtJSON(fullDocument, true, false)
-		if err != nil {
-			log.Error().Err(err).Str("stream", s.config.Name).Msg("Failed to marshal full document")
-			return err
-		}
+	return fullDocument, recoveryModeNormal, nil
 	}
 
-	// Create replication event using the existing RecordEvent structure
-	recordEvent := events.RecordEvent{
-		Action:     operationType,
-		Schema:     s.config.Source.Database,
-		Collection: s.getCollectionFromEvent(changeEvent),
-		Data:       data,
+	// For non-actionable operations, missing document is expected
+	if !isActionableOp {
+	return nil, recoveryModeNormal, nil
 	}
 
-	// Send to event channel (non-blocking)
-	select {
-	case s.eventChannel <- recordEvent:
+	// For actionable operations, attempt fallback if documentKey present
+	if documentKey, hasKey := changeEvent["documentKey"]; hasKey && documentKey != nil {
 		log.Debug().
 			Str("stream", s.config.Name).
 			Str("operation", operationType).
-			Msg("Event sent to processing pipeline")
-	default:
+			Msg("Attempting fallback document fetch")
+
+		fallbackDoc, fallbackErr := s.fallbackFetchDocument(changeEvent)
+		if fallbackErr != nil {
+			log.Error().Err(fallbackErr).
+				Str("stream", s.config.Name).
+				Str("operation", operationType).
+				Msg("Fallback document fetch failed")
+			s.mu.Lock()
+			s.metrics.ErrorCount++
+			s.mu.Unlock()
+		// Fall through to empty mode
+		} else {
+		log.Info().
+			Str("stream", s.config.Name).
+			Str("operation", operationType).
+			Msg("Successfully recovered document using fallback fetch")
+		return fallbackDoc, recoveryModeFallback, nil
+		}
+	} else {
 		log.Warn().
 			Str("stream", s.config.Name).
-			Msg("Event channel full, dropping event")
-		s.mu.Lock()
-		s.metrics.ErrorCount++
-		s.mu.Unlock()
+			Str("operation", operationType).
+			Msg("Missing fullDocument and documentKey for actionable operation")
 	}
 
-	return nil
+	// Last resort: return nil with empty mode (will use emptyDocJSON)
+	log.Warn().
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Msg("Using empty document for missing fullDocument")
+
+	return nil, recoveryModeEmpty, nil
 }
 
 // getCollectionFromEvent extracts collection name from change event
@@ -404,10 +551,120 @@ func (s *MongoDBStream) getCollectionFromEvent(changeEvent bson.M) string {
 
 // getCollectionFromConfig extracts collection name from configuration
 func (s *MongoDBStream) getCollectionFromConfig() string {
-	if s.config.Source.Options != nil {
-		if collection, ok := s.config.Source.Options["collection"].(string); ok {
-			return collection
+if s.config.Source.Options != nil {
+if collection, ok := s.config.Source.Options["collection"].(string); ok {
+return collection
+}
+}
+return ""
+}
+
+// extractFullDocument robustly extracts the fullDocument from a change event,
+// handling different BSON types that the MongoDB driver might return
+func (s *MongoDBStream) extractFullDocument(changeEvent bson.M) (bson.M, error) {
+	// Check if fullDocument exists in the change event
+	rawFullDoc, exists := changeEvent["fullDocument"]
+	if !exists {
+		// fullDocument doesn't exist - this is normal for delete operations
+		return nil, nil
+	}
+
+	// Handle nil fullDocument explicitly
+	if rawFullDoc == nil {
+		return nil, nil
+	}
+
+	// First, try the standard bson.M type assertion
+	if fullDoc, ok := rawFullDoc.(bson.M); ok {
+		return fullDoc, nil
+	}
+
+	// Try map[string]interface{} type assertion (common with some driver versions)
+	if fullDocMap, ok := rawFullDoc.(map[string]interface{}); ok {
+		// Convert map[string]interface{} to bson.M
+		result := make(bson.M)
+		for k, v := range fullDocMap {
+			result[k] = v
+		}
+		return result, nil
+	}
+
+	// Try bson.Raw type (binary BSON representation)
+	if fullDocRaw, ok := rawFullDoc.(bson.Raw); ok {
+		var result bson.M
+		if err := bson.Unmarshal(fullDocRaw, &result); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bson.Raw fullDocument: %w", err)
+		}
+		return result, nil
+	}
+
+	// Try bson.D type (ordered document)
+	if fullDocD, ok := rawFullDoc.(bson.D); ok {
+		result := make(bson.M)
+		for _, elem := range fullDocD {
+			result[elem.Key] = elem.Value
+		}
+		return result, nil
+	}
+
+	// fullDocument exists but is of unknown type
+	log.Debug().
+		Str("stream", s.config.Name).
+		Str("type", fmt.Sprintf("%T", rawFullDoc)).
+		Msg("fullDocument exists but is of unexpected type")
+
+	// Try to marshal and unmarshal to convert to bson.M
+	if rawBytes, err := bson.Marshal(rawFullDoc); err == nil {
+		var result bson.M
+		if err := bson.Unmarshal(rawBytes, &result); err == nil {
+			return result, nil
 		}
 	}
-	return ""
+
+	return nil, fmt.Errorf("fullDocument exists but cannot be converted to bson.M, type: %T", rawFullDoc)
+}
+
+// fallbackFetchDocument attempts to fetch the full document when fullDocument is missing
+// but documentKey is present (for insert/replace operations)
+func (s *MongoDBStream) fallbackFetchDocument(changeEvent bson.M) (bson.M, error) {
+	// Extract namespace information
+	ns, ok := changeEvent["ns"].(bson.M)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid ns field in change event")
+	}
+
+	dbName, ok := ns["db"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing db in ns field")
+	}
+
+	collName, ok := ns["coll"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing coll in ns field")
+	}
+
+	// Extract document key
+	documentKey, ok := changeEvent["documentKey"].(bson.M)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid documentKey field")
+	}
+
+	// Perform the fallback fetch
+	database := s.client.Database(dbName)
+	collection := database.Collection(collName)
+
+	var result bson.M
+	err := collection.FindOne(s.ctx, documentKey).Decode(&result)
+	if err != nil {
+		return nil, fmt.Errorf("fallback fetch failed: %w", err)
+	}
+
+	log.Debug().
+		Str("stream", s.config.Name).
+		Str("database", dbName).
+		Str("collection", collName).
+		Interface("documentKey", documentKey).
+		Msg("Successfully fetched document using fallback")
+
+	return result, nil
 }

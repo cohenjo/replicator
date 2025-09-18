@@ -207,16 +207,6 @@ type TLSConfig struct {
 	KeyFile  string `json:"key_file" yaml:"key_file"`
 }
 
-// MetricsConfig represents metrics configuration
-type MetricsConfig struct {
-	Enabled        bool          `json:"enabled" yaml:"enabled"`
-	Port           int           `json:"port" yaml:"port"`
-	Path           string        `json:"path" yaml:"path"`
-	Interval       time.Duration `json:"interval" yaml:"interval"`
-	Namespace      string        `json:"namespace" yaml:"namespace"`
-	AzureMonitor   bool          `json:"azure_monitor" yaml:"azure_monitor"`
-}
-
 // LoggingConfig represents logging configuration
 type LoggingConfig struct {
 	Level    string `json:"level" yaml:"level"`     // debug, info, warn, error
@@ -266,51 +256,77 @@ type MonitorConfig struct {
 	ConnectionString     string `json:"connection_string,omitempty" yaml:"connection_string,omitempty"`
 }
 
-// OpenTelemetryConfig represents OpenTelemetry configuration
-type OpenTelemetryConfig struct {
-	Enabled     bool            `json:"enabled" yaml:"enabled"`
-	ServiceName string          `json:"service_name" yaml:"service_name"`
-	Tracing     TracingConfig   `json:"tracing" yaml:"tracing"`
-	Metrics     OTelMetricsConfig `json:"metrics" yaml:"metrics"`
-}
-
-// TracingConfig represents OpenTelemetry tracing configuration
-type TracingConfig struct {
-	Enabled    bool    `json:"enabled" yaml:"enabled"`
-	Endpoint   string  `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
-	SampleRate float64 `json:"sample_rate" yaml:"sample_rate"`
-}
-
-// OTelMetricsConfig represents OpenTelemetry metrics configuration  
-type OTelMetricsConfig struct {
-	Enabled  bool   `json:"enabled" yaml:"enabled"`
-	Endpoint string `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
-	Interval time.Duration `json:"interval" yaml:"interval"`
-}
-
-// TelemetryConfig represents telemetry configuration
+// TelemetryConfig represents comprehensive telemetry configuration aligned with OpenTelemetry
 type TelemetryConfig struct {
+	// Core service identification
 	Enabled         bool              `json:"enabled" yaml:"enabled"`
 	ServiceName     string            `json:"service_name" yaml:"service_name"`
 	ServiceVersion  string            `json:"service_version" yaml:"service_version"`
 	Environment     string            `json:"environment" yaml:"environment"`
-	MetricsEnabled  bool              `json:"metrics_enabled" yaml:"metrics_enabled"`
-	TracingEnabled  bool              `json:"tracing_enabled" yaml:"tracing_enabled"`
-	OTLPEndpoint    string            `json:"otlp_endpoint" yaml:"otlp_endpoint"`
-	MetricsInterval time.Duration     `json:"metrics_interval" yaml:"metrics_interval"`
 	Labels          map[string]string `json:"labels" yaml:"labels"`
+	
+	// Metrics configuration
+	Metrics         TelemetryMetricsConfig `json:"metrics" yaml:"metrics"`
+	
+	// Tracing configuration  
+	Tracing         TelemetryTracingConfig `json:"tracing" yaml:"tracing"`
+	
+	// Health check endpoint
+	Health          TelemetryHealthConfig  `json:"health" yaml:"health"`
+}
+
+// TelemetryMetricsConfig represents metrics configuration within telemetry
+type TelemetryMetricsConfig struct {
+	Enabled         bool              `json:"enabled" yaml:"enabled"`
+	
+	// Prometheus HTTP endpoint (for /metrics)
+	Prometheus      PrometheusConfig  `json:"prometheus" yaml:"prometheus"`
+	
+	// OpenTelemetry OTLP export
+	OpenTelemetry   OTLPMetricsConfig `json:"opentelemetry" yaml:"opentelemetry"`
+	
+	// Collection settings
+	Interval        time.Duration     `json:"interval" yaml:"interval"`
+	Namespace       string            `json:"namespace" yaml:"namespace"`
+}
+
+// PrometheusConfig represents Prometheus HTTP endpoint configuration
+type PrometheusConfig struct {
+	Enabled         bool   `json:"enabled" yaml:"enabled"`
+	Path            string `json:"path" yaml:"path"`               // "/metrics"
+	Port            int    `json:"port" yaml:"port"`               // 9090 or can use main server port
+}
+
+// OTLPMetricsConfig represents OpenTelemetry OTLP metrics export configuration
+type OTLPMetricsConfig struct {
+	Enabled         bool          `json:"enabled" yaml:"enabled"`
+	Endpoint        string        `json:"endpoint" yaml:"endpoint"`   // "localhost:4317"
+	Interval        time.Duration `json:"interval" yaml:"interval"`   // "1m"
+	Insecure        bool          `json:"insecure" yaml:"insecure"`   // true for local dev
+}
+
+// TelemetryTracingConfig represents tracing configuration within telemetry
+type TelemetryTracingConfig struct {
+	Enabled         bool          `json:"enabled" yaml:"enabled"`
+	Endpoint        string        `json:"endpoint" yaml:"endpoint"`
+	SampleRate      float64       `json:"sample_rate" yaml:"sample_rate"`
+	Insecure        bool          `json:"insecure" yaml:"insecure"`
+}
+
+// TelemetryHealthConfig represents health check configuration within telemetry
+type TelemetryHealthConfig struct {
+	Enabled         bool   `json:"enabled" yaml:"enabled"`
+	Path            string `json:"path" yaml:"path"`               // "/health"
 }
 
 // Config represents the main application configuration
 type Config struct {
 	Server      ServerConfig      `json:"server" yaml:"server"`
 	Streams     []StreamConfig    `json:"streams" yaml:"streams"`
-	Metrics     MetricsConfig     `json:"metrics" yaml:"metrics"`
 	Logging     LoggingConfig     `json:"logging" yaml:"logging"`
 	Azure       AzureConfig       `json:"azure" yaml:"azure"`
-	OpenTelemetry OpenTelemetryConfig `json:"opentelemetry" yaml:"opentelemetry"`
 	Telemetry   TelemetryConfig   `json:"telemetry" yaml:"telemetry"`
-	
+
 	// Legacy fields for backwards compatibility
 	Debug              bool                   `json:"debug,omitempty" yaml:"debug,omitempty"`
 	Execute            bool                   `json:"execute,omitempty" yaml:"execute,omitempty"`
@@ -334,17 +350,24 @@ type WaterFlowsConfig struct {
 	Schema     string `json:"schema" yaml:"schema"`
 	Collection string `json:"collection" yaml:"collection"`
 	
-	// MongoDB specific fields
-	MongoURI                     string   `json:"mongo_uri,omitempty" yaml:"mongo_uri,omitempty"`
-	MongoDatabaseName            string   `json:"mongo_database_name,omitempty" yaml:"mongo_database_name,omitempty"`
-	MongoCollectionName          string   `json:"mongo_collection_name,omitempty" yaml:"mongo_collection_name,omitempty"`
-	MongoStartAtOperationTime    bool     `json:"mongo_start_at_operation_time,omitempty" yaml:"mongo_start_at_operation_time,omitempty"`
-	MongoFullDocument            string   `json:"mongo_full_document,omitempty" yaml:"mongo_full_document,omitempty"`
-	MongoResumeAfter             string   `json:"mongo_resume_after,omitempty" yaml:"mongo_resume_after,omitempty"`
-	MongoMaxAwaitTime            int      `json:"mongo_max_await_time,omitempty" yaml:"mongo_max_await_time,omitempty"`
-	MongoBatchSize               int32    `json:"mongo_batch_size,omitempty" yaml:"mongo_batch_size,omitempty"`
-	MongoIncludeOperations       []string `json:"mongo_include_operations,omitempty" yaml:"mongo_include_operations,omitempty"`
-	MongoExcludeOperations       []string `json:"mongo_exclude_operations,omitempty" yaml:"mongo_exclude_operations,omitempty"`
+// MongoDB specific fields
+MongoURI                     string   `json:"mongo_uri,omitempty" yaml:"mongo_uri,omitempty"`
+MongoDatabaseName            string   `json:"mongo_database_name,omitempty" yaml:"mongo_database_name,omitempty"`
+MongoCollectionName          string   `json:"mongo_collection_name,omitempty" yaml:"mongo_collection_name,omitempty"`
+MongoStartAtOperationTime    bool     `json:"mongo_start_at_operation_time,omitempty" yaml:"mongo_start_at_operation_time,omitempty"`
+MongoFullDocument            string   `json:"mongo_full_document,omitempty" yaml:"mongo_full_document,omitempty"`
+MongoResumeAfter             string   `json:"mongo_resume_after,omitempty" yaml:"mongo_resume_after,omitempty"`
+MongoMaxAwaitTime            int      `json:"mongo_max_await_time,omitempty" yaml:"mongo_max_await_time,omitempty"`
+MongoBatchSize               int32    `json:"mongo_batch_size,omitempty" yaml:"mongo_batch_size,omitempty"`
+MongoIncludeOperations       []string `json:"mongo_include_operations,omitempty" yaml:"mongo_include_operations,omitempty"`
+MongoExcludeOperations       []string `json:"mongo_exclude_operations,omitempty" yaml:"mongo_exclude_operations,omitempty"`
+
+// MongoDB authentication specific fields
+MongoAuthMethod              string   `json:"mongo_auth_method,omitempty" yaml:"mongo_auth_method,omitempty"`
+MongoTenantID                string   `json:"mongo_tenant_id,omitempty" yaml:"mongo_tenant_id,omitempty"`
+MongoClientID                string   `json:"mongo_client_id,omitempty" yaml:"mongo_client_id,omitempty"`
+MongoScopes                  []string `json:"mongo_scopes,omitempty" yaml:"mongo_scopes,omitempty"`
+MongoRefreshBeforeExpiry     string   `json:"mongo_refresh_before_expiry,omitempty" yaml:"mongo_refresh_before_expiry,omitempty"`
 	
 	// Cosmos DB specific fields
 	CosmosEndpoint               string   `json:"cosmos_endpoint,omitempty" yaml:"cosmos_endpoint,omitempty"`
@@ -489,13 +512,6 @@ func DefaultConfig() *Config {
 			WriteTimeout:    30 * time.Second,
 			ShutdownTimeout: 10 * time.Second,
 		},
-		Metrics: MetricsConfig{
-			Enabled:   true,
-			Port:      9090,
-			Path:      "/metrics",
-			Interval:  15 * time.Second,
-			Namespace: "replicator",
-		},
 		Logging: LoggingConfig{
 			Level:    "info",
 			Format:   "json",
@@ -518,27 +534,37 @@ func DefaultConfig() *Config {
 				Enabled: false,
 			},
 		},
-		OpenTelemetry: OpenTelemetryConfig{
-			Enabled:     true,
-			ServiceName: "replicator",
-			Tracing: TracingConfig{
-				Enabled:    true,
-				SampleRate: 0.1,
-			},
-			Metrics: OTelMetricsConfig{
-				Enabled:  true,
-				Interval: 15 * time.Second,
-			},
-		},
 		Telemetry: TelemetryConfig{
 			Enabled:         true,
 			ServiceName:     "replicator",
 			ServiceVersion:  "1.0.0",
 			Environment:     "development",
-			MetricsEnabled:  true,
-			TracingEnabled:  true,
-			OTLPEndpoint:    "localhost:4317",
-			MetricsInterval: 30 * time.Second,
+			Labels:          make(map[string]string),
+			Metrics: TelemetryMetricsConfig{
+				Enabled:         true,
+				Interval:        30 * time.Second,
+				Namespace:       "replicator",
+				Prometheus: PrometheusConfig{
+					Enabled:         true,
+					Path:            "/metrics",
+					Port:            9090,
+				},
+				OpenTelemetry: OTLPMetricsConfig{
+					Enabled:         true,
+					Endpoint:        "localhost:4317",
+					Interval:        1 * time.Minute,
+					Insecure:        true,
+				},
+			},
+			Tracing: TelemetryTracingConfig{
+				Enabled:         false,
+				SampleRate:      0.1,
+				Insecure:        true,
+			},
+			Health: TelemetryHealthConfig{
+				Enabled:         true,
+				Path:            "/health",
+			},
 		},
 		// Legacy defaults for backwards compatibility
 		Debug:              true,
@@ -553,25 +579,31 @@ func (c *Config) Validate() error {
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("invalid server port: %d", c.Server.Port)
 	}
-	
-	if c.Metrics.Enabled && (c.Metrics.Port <= 0 || c.Metrics.Port > 65535) {
-		return fmt.Errorf("invalid metrics port: %d", c.Metrics.Port)
+
+
+	// Validate telemetry config
+	if c.Telemetry.Enabled {
+		if c.Telemetry.Metrics.Enabled {
+			if c.Telemetry.Metrics.Prometheus.Enabled && (c.Telemetry.Metrics.Prometheus.Port <= 0 || c.Telemetry.Metrics.Prometheus.Port > 65535) {
+				return fmt.Errorf("invalid telemetry prometheus port: %d", c.Telemetry.Metrics.Prometheus.Port)
+			}
+		}
 	}
-	
+
 	validLogLevels := map[string]bool{
 		"debug": true, "info": true, "warn": true, "error": true,
 	}
 	if !validLogLevels[c.Logging.Level] {
 		return fmt.Errorf("invalid log level: %s", c.Logging.Level)
 	}
-	
+
 	validLogFormats := map[string]bool{
 		"json": true, "text": true,
 	}
 	if !validLogFormats[c.Logging.Format] {
 		return fmt.Errorf("invalid log format: %s", c.Logging.Format)
 	}
-	
+
 	// Validate stream configurations
 	streamNames := make(map[string]bool)
 	for _, stream := range c.Streams {
@@ -582,12 +614,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("duplicate stream name: %s", stream.Name)
 		}
 		streamNames[stream.Name] = true
-		
+
 		if err := c.validateStreamConfig(stream); err != nil {
 			return fmt.Errorf("invalid stream %s: %w", stream.Name, err)
 		}
 	}
-	
+
 	return nil
 }
 
