@@ -388,46 +388,129 @@ func (s *MongoDBStream) processEvents() {
 
 // processChangeEvent processes a single change event
 func (s *MongoDBStream) processChangeEvent(changeEvent bson.M) error {
-	// Extract basic event information
-	operationType, _ := changeEvent["operationType"].(string)
-	fullDocument, _ := changeEvent["fullDocument"].(bson.M)
+// Extract basic event information
+operationType, _ := changeEvent["operationType"].(string)
 
-	// Convert full document to JSON bytes
-	var data []byte
-	var err error
-	if fullDocument != nil {
-		data, err = bson.MarshalExtJSON(fullDocument, true, false)
-		if err != nil {
-			log.Error().Err(err).Str("stream", s.config.Name).Msg("Failed to marshal full document")
-			return err
-		}
-	}
+// Extract full document using robust type handling
+fullDocument, err := s.extractFullDocument(changeEvent)
+if err != nil {
+log.Error().Err(err).
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Msg("Failed to extract full document")
+s.mu.Lock()
+s.metrics.ErrorCount++
+s.mu.Unlock()
+return err
+}
 
-	// Create replication event using the existing RecordEvent structure
-	recordEvent := events.RecordEvent{
-		Action:     operationType,
-		Schema:     s.config.Source.Database,
-		Collection: s.getCollectionFromEvent(changeEvent),
-		Data:       data,
-	}
+// Handle missing fullDocument for actionable operations
+isActionableOp := operationType == "insert" || operationType == "replace"
+if fullDocument == nil && isActionableOp {
+// Log diagnostic information
+eventKeys := make([]string, 0, len(changeEvent))
+for k := range changeEvent {
+eventKeys = append(eventKeys, k)
+}
 
-	// Send to event channel (non-blocking)
-	select {
-	case s.eventChannel <- recordEvent:
-		log.Debug().
-			Str("stream", s.config.Name).
-			Str("operation", operationType).
-			Msg("Event sent to processing pipeline")
-	default:
-		log.Warn().
-			Str("stream", s.config.Name).
-			Msg("Event channel full, dropping event")
-		s.mu.Lock()
-		s.metrics.ErrorCount++
-		s.mu.Unlock()
-	}
+hasDocumentKey := false
+if _, exists := changeEvent["documentKey"]; exists {
+hasDocumentKey = true
+}
 
-	return nil
+log.Error().
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Strs("event_keys", eventKeys).
+Bool("has_document_key", hasDocumentKey).
+Msg("Missing fullDocument for actionable operation")
+
+// Attempt fallback fetch if documentKey is present
+if hasDocumentKey {
+log.Debug().
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Msg("Attempting fallback document fetch")
+
+fallbackDoc, fallbackErr := s.fallbackFetchDocument(changeEvent)
+if fallbackErr != nil {
+log.Error().Err(fallbackErr).
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Msg("Fallback document fetch failed")
+s.mu.Lock()
+s.metrics.ErrorCount++
+s.mu.Unlock()
+// Continue with empty data rather than failing completely
+} else {
+fullDocument = fallbackDoc
+log.Info().
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Msg("Successfully recovered document using fallback fetch")
+}
+}
+}
+
+// Convert full document to JSON bytes
+var data []byte
+if fullDocument != nil {
+data, err = bson.MarshalExtJSON(fullDocument, true, false)
+if err != nil {
+log.Error().Err(err).Str("stream", s.config.Name).Msg("Failed to marshal full document")
+s.mu.Lock()
+s.metrics.ErrorCount++
+s.mu.Unlock()
+return err
+}
+} else if isActionableOp {
+// For actionable operations with missing data, use empty JSON object to prevent downstream errors
+data = []byte("{}")
+log.Warn().
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Msg("Using empty JSON object for missing fullDocument")
+}
+
+// Always log data size for verification (especially when zero)
+dataSize := len(data)
+logLevel := log.Debug()
+if dataSize == 0 && isActionableOp {
+logLevel = log.Warn()
+}
+
+logLevel.
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Int("data_size", dataSize).
+Msg("Event processed")
+
+// Create replication event using the existing RecordEvent structure
+recordEvent := events.RecordEvent{
+Action:     operationType,
+Schema:     s.config.Source.Database,
+Collection: s.getCollectionFromEvent(changeEvent),
+Data:       data,
+}
+
+// Send to event channel (non-blocking)
+select {
+case s.eventChannel <- recordEvent:
+log.Debug().
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Int("data_size", len(data)).
+Msg("Event sent to processing pipeline")
+default:
+log.Warn().
+Str("stream", s.config.Name).
+Msg("Event channel full, dropping event")
+s.mu.Lock()
+s.metrics.ErrorCount++
+s.mu.Unlock()
+}
+
+return nil
 }
 
 // getCollectionFromEvent extracts collection name from change event
@@ -442,10 +525,120 @@ func (s *MongoDBStream) getCollectionFromEvent(changeEvent bson.M) string {
 
 // getCollectionFromConfig extracts collection name from configuration
 func (s *MongoDBStream) getCollectionFromConfig() string {
-	if s.config.Source.Options != nil {
-		if collection, ok := s.config.Source.Options["collection"].(string); ok {
-			return collection
+if s.config.Source.Options != nil {
+if collection, ok := s.config.Source.Options["collection"].(string); ok {
+return collection
+}
+}
+return ""
+}
+
+// extractFullDocument robustly extracts the fullDocument from a change event,
+// handling different BSON types that the MongoDB driver might return
+func (s *MongoDBStream) extractFullDocument(changeEvent bson.M) (bson.M, error) {
+	// Check if fullDocument exists in the change event
+	rawFullDoc, exists := changeEvent["fullDocument"]
+	if !exists {
+		// fullDocument doesn't exist - this is normal for delete operations
+		return nil, nil
+	}
+
+	// Handle nil fullDocument explicitly
+	if rawFullDoc == nil {
+		return nil, nil
+	}
+
+	// First, try the standard bson.M type assertion
+	if fullDoc, ok := rawFullDoc.(bson.M); ok {
+		return fullDoc, nil
+	}
+
+	// Try map[string]interface{} type assertion (common with some driver versions)
+	if fullDocMap, ok := rawFullDoc.(map[string]interface{}); ok {
+		// Convert map[string]interface{} to bson.M
+		result := make(bson.M)
+		for k, v := range fullDocMap {
+			result[k] = v
+		}
+		return result, nil
+	}
+
+	// Try bson.Raw type (binary BSON representation)
+	if fullDocRaw, ok := rawFullDoc.(bson.Raw); ok {
+		var result bson.M
+		if err := bson.Unmarshal(fullDocRaw, &result); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal bson.Raw fullDocument: %w", err)
+		}
+		return result, nil
+	}
+
+	// Try bson.D type (ordered document)
+	if fullDocD, ok := rawFullDoc.(bson.D); ok {
+		result := make(bson.M)
+		for _, elem := range fullDocD {
+			result[elem.Key] = elem.Value
+		}
+		return result, nil
+	}
+
+	// fullDocument exists but is of unknown type
+	log.Debug().
+		Str("stream", s.config.Name).
+		Str("type", fmt.Sprintf("%T", rawFullDoc)).
+		Msg("fullDocument exists but is of unexpected type")
+
+	// Try to marshal and unmarshal to convert to bson.M
+	if rawBytes, err := bson.Marshal(rawFullDoc); err == nil {
+		var result bson.M
+		if err := bson.Unmarshal(rawBytes, &result); err == nil {
+			return result, nil
 		}
 	}
-	return ""
+
+	return nil, fmt.Errorf("fullDocument exists but cannot be converted to bson.M, type: %T", rawFullDoc)
+}
+
+// fallbackFetchDocument attempts to fetch the full document when fullDocument is missing
+// but documentKey is present (for insert/replace operations)
+func (s *MongoDBStream) fallbackFetchDocument(changeEvent bson.M) (bson.M, error) {
+	// Extract namespace information
+	ns, ok := changeEvent["ns"].(bson.M)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid ns field in change event")
+	}
+
+	dbName, ok := ns["db"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing db in ns field")
+	}
+
+	collName, ok := ns["coll"].(string)
+	if !ok {
+		return nil, fmt.Errorf("missing coll in ns field")
+	}
+
+	// Extract document key
+	documentKey, ok := changeEvent["documentKey"].(bson.M)
+	if !ok {
+		return nil, fmt.Errorf("missing or invalid documentKey field")
+	}
+
+	// Perform the fallback fetch
+	database := s.client.Database(dbName)
+	collection := database.Collection(collName)
+
+	var result bson.M
+	err := collection.FindOne(s.ctx, documentKey).Decode(&result)
+	if err != nil {
+		return nil, fmt.Errorf("fallback fetch failed: %w", err)
+	}
+
+	log.Debug().
+		Str("stream", s.config.Name).
+		Str("database", dbName).
+		Str("collection", collName).
+		Interface("documentKey", documentKey).
+		Msg("Successfully fetched document using fallback")
+
+	return result, nil
 }

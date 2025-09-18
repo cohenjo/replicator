@@ -221,10 +221,25 @@ func convertValue(value interface{}) interface{} {
 
 func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 
+	// Guard against empty or nil Data to prevent JSON unmarshal errors
+	if len(record.Data) == 0 {
+		logger.Warn().
+		Str("action", record.Action).
+		Str("schema", record.Schema).
+		Str("collection", record.Collection).
+		Msg("Skipping event with empty Data field")
+		return
+	}
+
 	row := make(map[string]interface{})
 	err := ffjson.Unmarshal(record.Data, &row)
 	if err != nil {
-		logger.Error().Err(err).Msgf("Error while unmarshal record")
+		logger.Error().Err(err).
+		Str("action", record.Action).
+		Str("schema", record.Schema).
+		Str("collection", record.Collection).
+		Int("data_size", len(record.Data)).
+		Msgf("Error while unmarshal record")
 		return
 	}
 	
