@@ -643,8 +643,3 @@ func (tm *TelemetryManager) RecordEvent(ctx context.Context, streamName string, 
 					Labels:          make(map[string]string),
 				}
 			}
-			
-			// Note: Missing imports that need to be added to go.mod:
-			// - go.opentelemetry.io/otel/semconv/v1.17.0
-			// - go.opentelemetry.io/otel/sdk/resource
-			
