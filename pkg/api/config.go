@@ -23,7 +23,7 @@ type ConfigResponse struct {
 type ConfigUpdateRequest struct {
 	Streams    []config.StreamConfig        `json:"streams,omitempty"`
 	Server     *config.ServerConfig         `json:"server,omitempty"`
-	Metrics    *config.MetricsConfig        `json:"metrics,omitempty"`
+	Telemetry  *config.TelemetryConfig      `json:"telemetry,omitempty"`
 	Logging    *config.LoggingConfig        `json:"logging,omitempty"`
 	Transform  *config.TransformationRule   `json:"transform,omitempty"`
 	Monitoring *config.MonitorConfig        `json:"monitoring,omitempty"`

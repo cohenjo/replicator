@@ -173,14 +173,15 @@ func (l *Loader) loadFromEnvironment(config *Config, prefix string) error {
 		config.Logging.Level = logLevel
 	}
 
-	// Metrics configuration
-	if enabled := os.Getenv(prefix + "METRICS_ENABLED"); enabled != "" {
-		config.Metrics.Enabled = strings.ToLower(enabled) == "true"
+	// Telemetry configuration
+	if enabled := os.Getenv(prefix + "TELEMETRY_ENABLED"); enabled != "" {
+		config.Telemetry.Enabled = strings.ToLower(enabled) == "true"
 	}
-	if port := os.Getenv(prefix + "METRICS_PORT"); port != "" {
-		if portInt, err := strconv.Atoi(port); err == nil {
-			config.Metrics.Port = portInt
-		}
+	if serviceName := os.Getenv(prefix + "TELEMETRY_SERVICE_NAME"); serviceName != "" {
+		config.Telemetry.ServiceName = serviceName
+	}
+	if endpoint := os.Getenv(prefix + "TELEMETRY_OTLP_ENDPOINT"); endpoint != "" {
+		config.Telemetry.Metrics.OpenTelemetry.Endpoint = endpoint
 	}
 
 	// Azure configuration
@@ -274,32 +275,6 @@ func (l *Loader) validateAzureConfig(config AzureConfig) error {
 	}
 
 	return nil
-}
-
-// NewDefaultConfig creates a default configuration
-func NewDefaultConfig() *Config {
-	return &Config{
-		Server: ServerConfig{
-			Host: "0.0.0.0",
-			Port: 8080,
-		},
-		Metrics: MetricsConfig{
-			Enabled: true,
-			Port:    9090,
-			Path:    "/metrics",
-		},
-		Logging: LoggingConfig{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
-		},
-		Azure: AzureConfig{
-			Authentication: AuthenticationConfig{
-				Method: "managed_identity",
-			},
-		},
-		Streams: []StreamConfig{},
-	}
 }
 
 // validateStream validates individual stream configuration
@@ -417,53 +392,36 @@ func (l *Loader) SaveToFile(config *Config, filename string) error {
 
 // GenerateTemplate generates a configuration template with all available options
 func (l *Loader) GenerateTemplate() *Config {
-	return &Config{
-		Server: ServerConfig{
-			Host: "0.0.0.0",
-			Port: 8080,
-		},
-		Metrics: MetricsConfig{
-			Enabled: true,
-			Port:    9090,
-			Path:    "/metrics",
-		},
-		Logging: LoggingConfig{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
-		},
-		Azure: AzureConfig{
-			Authentication: AuthenticationConfig{
-				Method: "managed_identity",
+	config := DefaultConfig()
+
+	// Add example streams
+	config.Streams = []StreamConfig{
+		{
+			Name:        "example-mongodb-stream",
+			Enabled:     false,
+			Source: SourceConfig{
+				Type:     SourceTypeMongoDB,
+				URI:      "mongodb://localhost:27017",
+				Database: "mydb",
+			},
+			Target: TargetConfig{
+				Type: TargetTypeKafka,
+				Host: "localhost:9092",
 			},
 		},
-		Streams: []StreamConfig{
-			{
-				Name:        "example-mongodb-stream",
-				Enabled:     false,
-				Source: SourceConfig{
-					Type:     SourceTypeMongoDB,
-					URI:      "mongodb://localhost:27017",
-					Database: "mydb",
-				},
-				Target: TargetConfig{
-					Type: TargetTypeKafka,
-					Host: "localhost:9092",
-				},
+		{
+			Name:        "example-postgresql-stream",
+			Enabled:     false,
+			Source: SourceConfig{
+				Type:     SourceTypePostgreSQL,
+				URI:      "postgres://user:password@localhost:5432/mydb",
+				Database: "mydb",
 			},
-			{
-				Name:        "example-postgresql-stream",
-				Enabled:     false,
-				Source: SourceConfig{
-					Type:     SourceTypePostgreSQL,
-					URI:      "postgres://user:password@localhost:5432/mydb",
-					Database: "mydb",
-				},
-				Target: TargetConfig{
-					Type: TargetTypeElastic,
-					Host: "localhost:9200",
-				},
+			Target: TargetConfig{
+				Type: TargetTypeElastic,
+				Host: "localhost:9200",
 			},
 		},
 	}
+	return config
 }

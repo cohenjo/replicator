@@ -97,17 +97,7 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	}
 	
 	// Create metrics collector
-	metricsCollector, err := metrics.NewTelemetryManager(metrics.TelemetryConfig{
-		ServiceName:     opts.Config.Telemetry.ServiceName,
-		ServiceVersion:  opts.Config.Telemetry.ServiceVersion,
-		Environment:     opts.Config.Telemetry.Environment,
-		Enabled:         opts.Config.Telemetry.Enabled,
-		MetricsEnabled:  opts.Config.Telemetry.MetricsEnabled,
-		TracingEnabled:  opts.Config.Telemetry.TracingEnabled,
-		OTLPEndpoint:    opts.Config.Telemetry.OTLPEndpoint,
-		MetricsInterval: opts.Config.Telemetry.MetricsInterval,
-		Labels:          opts.Config.Telemetry.Labels,
-	})
+	metricsCollector, err := metrics.NewTelemetryManager(opts.Config.Telemetry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metrics collector: %w", err)
 	}
@@ -717,4 +707,3 @@ func (s *Service) Start(ctx context.Context) error {
 																		Checks:      make(map[string]models.CheckResult),
 																	}
 																}
-																

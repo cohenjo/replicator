@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/models"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -17,6 +18,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"github.com/rs/zerolog/log"
 )
+
+// TelemetryConfig is an alias to the config package TelemetryConfig for compatibility
+type TelemetryConfig = config.TelemetryConfig
 
 // TelemetryManager manages OpenTelemetry metrics and tracing
 type TelemetryManager struct {
@@ -36,19 +40,6 @@ type TelemetryManager struct {
 	
 	mutex           sync.RWMutex
 	started         bool
-}
-
-// TelemetryConfig represents the configuration for telemetry
-type TelemetryConfig struct {
-	ServiceName     string            `json:"service_name" yaml:"service_name"`
-	ServiceVersion  string            `json:"service_version" yaml:"service_version"`
-	Environment     string            `json:"environment" yaml:"environment"`
-	Enabled         bool              `json:"enabled" yaml:"enabled"`
-	MetricsEnabled  bool              `json:"metrics_enabled" yaml:"metrics_enabled"`
-	TracingEnabled  bool              `json:"tracing_enabled" yaml:"tracing_enabled"`
-	OTLPEndpoint    string            `json:"otlp_endpoint" yaml:"otlp_endpoint"`
-	MetricsInterval time.Duration     `json:"metrics_interval" yaml:"metrics_interval"`
-	Labels          map[string]string `json:"labels" yaml:"labels"`
 }
 
 // MetricsCollector collects and reports metrics for streams
@@ -74,9 +65,9 @@ type StreamCollector struct {
 func NewTelemetryManager(config TelemetryConfig) (*TelemetryManager, error) {
 	log.Info().
 		Bool("enabled", config.Enabled).
-		Bool("metrics_enabled", config.MetricsEnabled).
-		Bool("tracing_enabled", config.TracingEnabled).
-		Str("otlp_endpoint", config.OTLPEndpoint).
+		Bool("metrics_enabled", config.Metrics.Enabled).
+		Bool("tracing_enabled", config.Tracing.Enabled).
+		Str("otlp_endpoint", config.Metrics.OpenTelemetry.Endpoint).
 		Str("service_name", config.ServiceName).
 		Msg("Creating telemetry manager with config")
 
@@ -103,19 +94,19 @@ func (tm *TelemetryManager) initialize() error {
 	}
 
 	// Setup metrics
-	if tm.config.MetricsEnabled {
+	if tm.config.Metrics.Enabled {
 		if err := tm.setupMetrics(); err != nil {
 			return fmt.Errorf("failed to setup metrics: %w", err)
 		}
 	}
 
 	// Setup tracing
-	if tm.config.TracingEnabled {
+	if tm.config.Tracing.Enabled {
 		if err := tm.setupTracing(); err != nil {
 			return fmt.Errorf("failed to setup tracing: %w", err)
 		}
 	}
-	
+
 	return tm.createInstruments()
 }
 
@@ -124,7 +115,7 @@ func (tm *TelemetryManager) setupMetrics() error {
 	// Create OTLP gRPC exporter
 	exporter, err := otlpmetricgrpc.New(
 		context.Background(),
-		otlpmetricgrpc.WithEndpoint(tm.config.OTLPEndpoint),
+		otlpmetricgrpc.WithEndpoint(tm.config.Metrics.OpenTelemetry.Endpoint),
 		otlpmetricgrpc.WithInsecure(), // Use insecure for local development
 	)
 	if err != nil {
@@ -134,7 +125,7 @@ func (tm *TelemetryManager) setupMetrics() error {
 	// Create meter provider with periodic reader
 	reader := sdkmetric.NewPeriodicReader(
 		exporter,
-		sdkmetric.WithInterval(tm.config.MetricsInterval),
+		sdkmetric.WithInterval(tm.config.Metrics.Interval),
 	)
 
 	tm.meterProvider = sdkmetric.NewMeterProvider(
@@ -152,8 +143,8 @@ func (tm *TelemetryManager) setupMetrics() error {
 	)
 
 	log.Info().
-		Str("otlp_endpoint", tm.config.OTLPEndpoint).
-		Dur("metrics_interval", tm.config.MetricsInterval).
+		Str("otlp_endpoint", tm.config.Metrics.OpenTelemetry.Endpoint).
+		Dur("metrics_interval", tm.config.Metrics.Interval).
 		Msg("OpenTelemetry metrics configured with OTLP gRPC exporter")
 
 	return nil
@@ -195,7 +186,7 @@ func (tm *TelemetryManager) createResource() *resource.Resource {
 
 // createInstruments creates all the metric instruments
 func (tm *TelemetryManager) createInstruments() error {
-	if !tm.config.MetricsEnabled || tm.meter == nil {
+	if !tm.config.Metrics.Enabled || tm.meter == nil {
 		return nil
 	}
 
@@ -350,7 +341,7 @@ func (tm *TelemetryManager) Stop(ctx context.Context) error {
 
 // RecordEvent records metrics for a processed event
 func (tm *TelemetryManager) RecordEvent(ctx context.Context, streamName string, event models.ChangeEvent, processingTime time.Duration, success bool) {
-	if !tm.config.MetricsEnabled {
+	if !tm.config.Metrics.Enabled {
 		return
 	}
 	
@@ -377,11 +368,11 @@ func (tm *TelemetryManager) RecordEvent(ctx context.Context, streamName string, 
 		}
 	}
 	
-	// RecordBytes records bytes processed
-	func (tm *TelemetryManager) RecordBytes(ctx context.Context, streamName string, bytes int64) {
-		if !tm.config.MetricsEnabled {
-			return
-		}
+// RecordBytes records bytes processed
+func (tm *TelemetryManager) RecordBytes(ctx context.Context, streamName string, bytes int64) {
+	if !tm.config.Metrics.Enabled {
+		return
+	}
 		
 		attributes := []attribute.KeyValue{
 			attribute.String("stream_name", streamName),
@@ -390,11 +381,11 @@ func (tm *TelemetryManager) RecordEvent(ctx context.Context, streamName string, 
 		tm.counters["bytes_processed"].Add(ctx, bytes, metric.WithAttributes(attributes...))
 	}
 	
-	// RecordMongoRecoveryMode records MongoDB recovery mode metrics
-	func (tm *TelemetryManager) RecordMongoRecoveryMode(ctx context.Context, streamName, operation, recoveryMode string) {
-		if !tm.config.MetricsEnabled {
-			return
-		}
+// RecordMongoRecoveryMode records MongoDB recovery mode metrics
+func (tm *TelemetryManager) RecordMongoRecoveryMode(ctx context.Context, streamName, operation, recoveryMode string) {
+	if !tm.config.Metrics.Enabled {
+		return
+	}
 		
 		attributes := []attribute.KeyValue{
 			attribute.String("stream_name", streamName),
@@ -411,11 +402,11 @@ func (tm *TelemetryManager) RecordEvent(ctx context.Context, streamName string, 
 		}
 	}
 	
-	// RecordMongoFallbackFailure records MongoDB fallback fetch failures
-	func (tm *TelemetryManager) RecordMongoFallbackFailure(ctx context.Context, streamName, operation string) {
-		if !tm.config.MetricsEnabled {
-			return
-		}
+// RecordMongoFallbackFailure records MongoDB fallback fetch failures
+func (tm *TelemetryManager) RecordMongoFallbackFailure(ctx context.Context, streamName, operation string) {
+	if !tm.config.Metrics.Enabled {
+		return
+	}
 		
 		attributes := []attribute.KeyValue{
 			attribute.String("stream_name", streamName),
@@ -461,14 +452,14 @@ func (tm *TelemetryManager) RecordEvent(ctx context.Context, streamName string, 
 		return result
 	}
 	
-	// StartTrace starts a new trace span
-	func (tm *TelemetryManager) StartTrace(ctx context.Context, operationName string, attributes ...attribute.KeyValue) (context.Context, trace.Span) {
-		if !tm.config.TracingEnabled || tm.tracer == nil {
-			return ctx, trace.SpanFromContext(ctx)
-		}
-		
-		return tm.tracer.Start(ctx, operationName, trace.WithAttributes(attributes...))
+// StartTrace starts a new trace span
+func (tm *TelemetryManager) StartTrace(ctx context.Context, operationName string, attributes ...attribute.KeyValue) (context.Context, trace.Span) {
+	if !tm.config.Tracing.Enabled || tm.tracer == nil {
+		return ctx, trace.SpanFromContext(ctx)
 	}
+		
+	return tm.tracer.Start(ctx, operationName, trace.WithAttributes(attributes...))
+}
 	
 	// Observable gauge callback functions
 	func (tm *TelemetryManager) getActiveStreamsCount(ctx context.Context, observer metric.Float64Observer) error {
@@ -629,17 +620,7 @@ func (tm *TelemetryManager) RecordEvent(ctx context.Context, streamName string, 
 				sc.lastMetrics = metrics
 			}
 			
-			// DefaultTelemetryConfig returns a default telemetry configuration
-			func DefaultTelemetryConfig() TelemetryConfig {
-				return TelemetryConfig{
-					ServiceName:     "replicator",
-					ServiceVersion:  "1.0.0",
-					Environment:     "development",
-					Enabled:         true,
-					MetricsEnabled:  true,
-					TracingEnabled:  true,
-					OTLPEndpoint:    "localhost:4317",
-					MetricsInterval: 30 * time.Second,
-					Labels:          make(map[string]string),
-				}
-			}
+// DefaultTelemetryConfig returns a default telemetry configuration
+func DefaultTelemetryConfig() TelemetryConfig {
+	return config.DefaultConfig().Telemetry
+}

@@ -162,9 +162,9 @@ func showConfiguration(cfg *config.Config, logger *logrus.Logger) {
 	if cfg.Server.TLS != nil {
 		fmt.Printf("    TLS Enabled: %t\n", cfg.Server.TLS.Enabled)
 	}
-	fmt.Printf("  Metrics:\n")
-	fmt.Printf("    Enabled: %t\n", cfg.Metrics.Enabled)
-	fmt.Printf("    Port: %d\n", cfg.Metrics.Port)
+	fmt.Printf("  Telemetry:\n")
+	fmt.Printf("    Enabled: %t\n", cfg.Telemetry.Enabled)
+	fmt.Printf("    Metrics Enabled: %t\n", cfg.Telemetry.Metrics.Enabled)
 	fmt.Printf("  Azure Authentication: %s\n", cfg.Azure.Authentication.Method)
 	fmt.Printf("  Streams: %d configured\n", len(cfg.Streams))
 

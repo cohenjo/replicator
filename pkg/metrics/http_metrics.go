@@ -23,7 +23,7 @@ func (tm *TelemetryManager) RecordMetrics(ctx context.Context, metrics map[strin
 
 // IncrementCounter increments a named counter (for backward compatibility)
 func (tm *TelemetryManager) IncrementCounter(name string, value int64) {
-	if !tm.config.MetricsEnabled {
+	if !tm.config.Metrics.Enabled {
 		return
 	}
 	
