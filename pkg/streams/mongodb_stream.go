@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cohenjo/replicator/pkg/auth"
@@ -73,6 +73,7 @@ func (s *MongoDBStream) Start(ctx context.Context) error {
 		s.state.LastError = &lastError
 		return fmt.Errorf("failed to connect to MongoDB: %w", err)
 	}
+	log.Info().Str("stream", s.config.Name).Msg("Connected to MongoDB")
 
 	// Create change stream
 	if err := s.createChangeStream(); err != nil {
@@ -81,6 +82,7 @@ func (s *MongoDBStream) Start(ctx context.Context) error {
 		s.state.LastError = &lastError
 		return fmt.Errorf("failed to create change stream: %w", err)
 	}
+	log.Info().Str("stream", s.config.Name).Msg("Change stream created")
 
 	// Update state
 	s.state.Status = config.StreamStatusRunning
@@ -90,6 +92,7 @@ func (s *MongoDBStream) Start(ctx context.Context) error {
 	s.metrics.LastProcessedTime = time.Now()
 
 	// Start processing events in background
+	log.Info().Str("stream", s.config.Name).Msg("Starting event processing")
 	go s.processEvents()
 
 	log.Info().Str("stream", s.config.Name).Msg("MongoDB stream started successfully")
@@ -300,10 +303,12 @@ func (s *MongoDBStream) createChangeStream() error {
 
 	if collection := s.getCollectionFromConfig(); collection != "" {
 		// Watch specific collection
+		log.Info().Str("stream", s.config.Name).Str("collection", collection).Str("database", s.config.Source.Database).Msg("Watching specific collection")
 		coll := database.Collection(collection)
 		changeStream, err = coll.Watch(s.ctx, pipeline, options)
 	} else {
 		// Watch entire database
+		log.Info().Str("stream", s.config.Name).Str("database", s.config.Source.Database).Msg("Watching entire database")
 		changeStream, err = database.Watch(s.ctx, pipeline, options)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/replicator"
@@ -26,6 +27,7 @@ func main() {
 		showVersion   = flag.Bool("version", false, "Show version information")
 		showConfig    = flag.Bool("show-config", false, "Show configuration and exit")
 		validateOnly  = flag.Bool("validate", false, "Validate configuration and exit")
+		sleep         = flag.Bool("sleep", false, "Sleep for a duration (for testing purposes)")
 		generateConfig = flag.String("generate-config", "", "Generate configuration template to file")
 	)
 	flag.Parse()
@@ -84,6 +86,12 @@ func main() {
 	if *validateOnly {
 		logger.Info("Configuration validation passed")
 		os.Exit(0)
+	}
+
+	// Sleep for a duration and exit if requested
+	if *sleep {
+		logger.Info("Sleep for 60 minutes, continuing...")
+		time.Sleep(60 * time.Minute)
 	}
 
 	// Run the application

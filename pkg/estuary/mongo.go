@@ -10,9 +10,8 @@ import (
 	"github.com/cohenjo/replicator/pkg/config"
 	"github.com/cohenjo/replicator/pkg/events"
 	"github.com/pquerna/ffjson/ffjson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 type MongoEndpoint struct {
@@ -24,8 +23,9 @@ type MongoEndpoint struct {
 
 func NewMongoEndpoint(streamConfig *config.WaterFlowsConfig) (endpoint MongoEndpoint) {
 	// Set timeout context
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// ctx, cancel :=  context.WithTimeout(context.Background(), 10*time.Second)
+	// defer cancel()
+	ctx := context.Background()
 	
 	// Log configuration for debugging
 	logger.Debug().
@@ -155,7 +155,7 @@ func convertValue(value interface{}) interface{} {
 		if oid, ok := v["$oid"]; ok {
 			// Convert ObjectId
 			if oidStr, isString := oid.(string); isString {
-				if objectID, err := primitive.ObjectIDFromHex(oidStr); err == nil {
+				if objectID, err := bson.ObjectIDFromHex(oidStr); err == nil {
 					return objectID
 				}
 			}
