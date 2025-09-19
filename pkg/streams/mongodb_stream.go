@@ -479,7 +479,7 @@ Str("operation", operationType).
 Str("collection", collection).
 Int("document_key_len", len(documentKeyBytes)).
 Str("document_key", string(documentKeyBytes)).
-Interface("document_key", documentKey).
+Interface("documentKey", documentKey).
 Msg("Set DocumentKey from document key")
 } else {
 log.Warn().
@@ -488,6 +488,7 @@ Str("operation", operationType).
 Str("collection", collection).
 Interface("change_event_keys", getMapKeys(changeEvent)).
 Msg("Missing document key for update/delete operation")
+recordEvent.DocumentKey = emptyDocJSON // Fallback to empty document key
 }
 }
 	if operationType == "delete" {

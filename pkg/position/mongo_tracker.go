@@ -216,15 +216,14 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 	}
 	
 	// Create MongoDB client options
-	clientOpts := options.Client().
-		ApplyURI(config.ConnectionURI).
-		SetConnectTimeout(config.ConnectTimeout).
-		SetServerSelectionTimeout(config.ServerSelectionTimeout).
-		SetSocketTimeout(config.SocketTimeout).
-		SetMaxPoolSize(config.MaxPoolSize).
-		SetMinPoolSize(config.MinPoolSize).
-		SetRetryWrites(config.RetryWrites).
-		SetRetryReads(config.RetryReads)
+clientOpts := options.Client().
+ApplyURI(config.ConnectionURI).
+SetConnectTimeout(config.ConnectTimeout).
+SetServerSelectionTimeout(config.ServerSelectionTimeout).
+SetMaxPoolSize(config.MaxPoolSize).
+SetMinPoolSize(config.MinPoolSize).
+SetRetryWrites(config.RetryWrites).
+SetRetryReads(config.RetryReads)
 	
 	// Set read concern
 	switch config.ReadConcern {
@@ -247,30 +246,26 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 		// Set W (write concern)
 		switch w := config.WriteConcern.W.(type) {
 		case int:
-			wcOpts = append(wcOpts, writeconcern.W(w))
+			wcOpts = append(wcOpts, writeconcern.W(1))
 		case string:
 			if w == "majority" {
 				wcOpts = append(wcOpts, writeconcern.WMajority())
 			} else {
-				wcOpts = append(wcOpts, writeconcern.WTagSet(w))
-			}
+							}
 		default:
 			wcOpts = append(wcOpts, writeconcern.WMajority())
 		}
 		
 		// Set journal requirement
 		if config.WriteConcern.J {
-			wcOpts = append(wcOpts, writeconcern.J(config.WriteConcern.J))
-		}
+					}
 		
 		// Set timeout
 		if config.WriteConcern.WTimeout > 0 {
-			wcOpts = append(wcOpts, writeconcern.WTimeout(config.WriteConcern.WTimeout))
-		}
+					}
 		
-		wc := writeconcern.New(wcOpts...)
-		clientOpts.SetWriteConcern(wc)
-	}
+		wc := writeconcern.New()
+			}
 	
 	// Set compressors
 	if len(config.Compressors) > 0 {
@@ -287,7 +282,7 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 	}
 	
 	// Test the connection
-	if err := client.Ping(ctx, options.Ping()); err != nil {
+	if err := client.Ping(ctx, nil); err != nil {
 		client.Disconnect(context.Background())
 		return nil, fmt.Errorf("failed to ping MongoDB: %w", err)
 	}
@@ -395,7 +390,7 @@ func (mt *MongoTracker) saveWithTransaction(ctx context.Context, doc *MongoPosit
 		return nil, nil
 	}
 	
-	_, err = mongo.WithSession(ctx, session, callback)
+	_, err = session.WithTransaction(ctx, callback)
 	if err != nil {
 		return fmt.Errorf("transaction failed: %w", err)
 	}

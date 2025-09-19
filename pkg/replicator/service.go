@@ -439,20 +439,21 @@ return nil
 
 // Convert event to map for transformation
 eventData := map[string]interface{}{
-"action":       event.Action,
-"schema":       event.Schema,
-"collection":   event.Collection,
-"table":        event.Collection, // Use collection as table
-"data":         event.Data,
-"old_data":     event.OldData,
-"position":     "", // Not available in this event type
-"timestamp":    time.Now(), // Use current time
-"source":       event.Schema, // Use schema as source
-"_metadata": map[string]interface{}{
-"event_id":    fmt.Sprintf("%s_%s_%d", event.Schema, event.Collection, time.Now().UnixNano()),
-"source_type": event.Schema,
-"processed_at": time.Now(),
-},
+    "action":       event.Action,
+    "schema":       event.Schema,
+    "collection":   event.Collection,
+    "table":        event.Collection, // Use collection as table
+    "data":         event.Data,
+    "old_data":     event.OldData,
+    "documentKey":  event.DocumentKey, // Ensure documentKey is preserved
+    "position":     "", // Not available in this event type
+    "timestamp":    time.Now(), // Use current time
+    "source":       event.Schema, // Use schema as source
+    "_metadata": map[string]interface{}{
+        "event_id":    fmt.Sprintf("%s_%s_%d", event.Schema, event.Collection, time.Now().UnixNano()),
+        "source_type": event.Schema,
+        "processed_at": time.Now(),
+    },
 }
 
 // Apply transformations if configured
