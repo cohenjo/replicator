@@ -461,35 +461,35 @@ log.Debug().
 		Data:        data,
 	}
 
-	if operationType == "update" || operationType == "delete" {
-		if documentKey, ok := changeEvent["documentKey"].(bson.M); ok && documentKey != nil {
-			oldDataBytes, err := bson.MarshalExtJSON(documentKey, true, false)
-			if err != nil {
-				log.Error().Err(err).
-					Str("stream", s.config.Name).
-					Str("operation", operationType).
-					Str("collection", collection).
-					Msg("Failed to marshal document key")
-				return err
-			}
-			recordEvent.DocumentKey = oldDataBytes
-			log.Debug().
-				Str("stream", s.config.Name).
-				Str("operation", operationType).
-				Str("collection", collection).
-				Int("old_data_len", len(oldDataBytes)).
-				Str("old_data", string(oldDataBytes)).
-				Interface("document_key", documentKey).
-				Msg("Set OldData from document key")
-		} else {
-			log.Warn().
-				Str("stream", s.config.Name).
-				Str("operation", operationType).
-				Str("collection", collection).
-				Interface("change_event_keys", getMapKeys(changeEvent)).
-				Msg("Missing document key for update/delete operation")
-		}
-	}
+if operationType == "update" || operationType == "delete" {
+if documentKey, ok := changeEvent["documentKey"].(bson.M); ok && documentKey != nil {
+documentKeyBytes, err := bson.MarshalExtJSON(documentKey, true, false)
+if err != nil {
+log.Error().Err(err).
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Str("collection", collection).
+Msg("Failed to marshal document key")
+return err
+}
+recordEvent.DocumentKey = documentKeyBytes
+log.Debug().
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Str("collection", collection).
+Int("document_key_len", len(documentKeyBytes)).
+Str("document_key", string(documentKeyBytes)).
+Interface("document_key", documentKey).
+Msg("Set DocumentKey from document key")
+} else {
+log.Warn().
+Str("stream", s.config.Name).
+Str("operation", operationType).
+Str("collection", collection).
+Interface("change_event_keys", getMapKeys(changeEvent)).
+Msg("Missing document key for update/delete operation")
+}
+}
 	if operationType == "delete" {
 		recordEvent.Data = emptyDocJSON
 	}
