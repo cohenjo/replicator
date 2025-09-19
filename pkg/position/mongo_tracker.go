@@ -216,15 +216,14 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 	}
 	
 	// Create MongoDB client options
-	clientOpts := options.Client().
-		ApplyURI(config.ConnectionURI).
-		SetConnectTimeout(config.ConnectTimeout).
-		SetServerSelectionTimeout(config.ServerSelectionTimeout).
-		SetSocketTimeout(config.SocketTimeout).
-		SetMaxPoolSize(config.MaxPoolSize).
-		SetMinPoolSize(config.MinPoolSize).
-		SetRetryWrites(config.RetryWrites).
-		SetRetryReads(config.RetryReads)
+clientOpts := options.Client().
+ApplyURI(config.ConnectionURI).
+SetConnectTimeout(config.ConnectTimeout).
+SetServerSelectionTimeout(config.ServerSelectionTimeout).
+SetMaxPoolSize(config.MaxPoolSize).
+SetMinPoolSize(config.MinPoolSize).
+SetRetryWrites(config.RetryWrites).
+SetRetryReads(config.RetryReads)
 	
 	// Set read concern
 	switch config.ReadConcern {
@@ -242,35 +241,35 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 	
 	// Set write concern
 	if config.WriteConcern != nil {
-		wcOpts := []writeconcern.Option{}
+		wcOpts := make([]writeconcern.Option, 0)
 		
 		// Set W (write concern)
 		switch w := config.WriteConcern.W.(type) {
-		case int:
-			wcOpts = append(wcOpts, writeconcern.W(w))
-		case string:
-			if w == "majority" {
-				wcOpts = append(wcOpts, writeconcern.WMajority())
-			} else {
-				wcOpts = append(wcOpts, writeconcern.WTagSet(w))
-			}
+case int:
+wcOpts = append(wcOpts, writeconcern.W(w))
+case string:
+if w == "majority" {
+wcOpts = append(wcOpts, writeconcern.WMajority())
+} else {
+wcOpts = append(wcOpts, writeconcern.WTagSet(w))
+}
 		default:
 			wcOpts = append(wcOpts, writeconcern.WMajority())
 		}
 		
 		// Set journal requirement
-		if config.WriteConcern.J {
-			wcOpts = append(wcOpts, writeconcern.J(config.WriteConcern.J))
-		}
+if config.WriteConcern.J {
+wcOpts = append(wcOpts, writeconcern.J(true))
+}
 		
 		// Set timeout
-		if config.WriteConcern.WTimeout > 0 {
-			wcOpts = append(wcOpts, writeconcern.WTimeout(config.WriteConcern.WTimeout))
-		}
+if config.WriteConcern.WTimeout > 0 {
+wcOpts = append(wcOpts, writeconcern.WTimeout(config.WriteConcern.WTimeout))
+}
 		
 		wc := writeconcern.New(wcOpts...)
-		clientOpts.SetWriteConcern(wc)
-	}
+clientOpts.SetWriteConcern(wc)
+			}
 	
 	// Set compressors
 	if len(config.Compressors) > 0 {
@@ -450,9 +449,9 @@ func (mt *MongoTracker) Load(ctx context.Context, streamID string) (Position, ma
 	
 	err := mt.collection.FindOne(ctx, filter).Decode(&doc)
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return nil, nil, ErrPositionNotFound
-		}
+	if err == mongo.ErrNoDocuments {
+		return nil, nil, ErrPositionNotFound
+	}
 		return nil, nil, fmt.Errorf("failed to find document: %w", err)
 	}
 	

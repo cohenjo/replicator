@@ -5,7 +5,7 @@
 ### 1. Core Components Added
 
 #### **MongoDB Position Tracker** (`pkg/position/mongo_tracker.go`)
-- **Complete MongoDB integration** using `go.mongodb.org/mongo-driver v1.12.1`
+- **Complete MongoDB integration** using `go.mongodb.org/mongo-driver/v2 v2.3.0`
 - **Full Tracker interface implementation** with all required methods
 - **Production-ready features**:
   - Connection pooling and timeout management

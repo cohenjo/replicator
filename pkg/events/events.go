@@ -20,12 +20,12 @@ OldData contains the key to the previous record being changes (used for updates 
 Data olds the full document in JSON format.
 */
 type RecordEvent struct {
-	Action     string
-	Schema     string
-	Collection string
-
-	OldData []byte // Used for updates.
-	Data    []byte // let's keep a json here to use Kazaam
+	Action      string
+	Schema      string
+	Collection  string
+	DocumentKey []byte // Explicit document identifier for updates and deletes
+	OldData     []byte // Used for updates.
+	Data        []byte // let's keep a json here to use Kazaam
 }
 
 type KafkaMessage struct {

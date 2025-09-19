@@ -236,12 +236,12 @@ func TestMongoDBStreamProvider_processChangeEvent(t *testing.T) {
 			mongoEvent: MongoDBChangeEvent{
 				ID:            bson.M{"_data": "test"},
 				OperationType: "insert",
-				ClusterTime:   primitive.Timestamp{T: uint32(time.Now().Unix()), I: 0},
+				ClusterTime:   bson.Timestamp{T: uint32(time.Now().Unix()), I: 0},
 				FullDocument: bson.M{
-					"_id":  primitive.NewObjectID(),
+					"_id":  bson.NewObjectID(),
 					"name": "test",
 				},
-				DocumentKey: bson.M{"_id": primitive.NewObjectID()},
+				DocumentKey: bson.M{"_id": bson.NewObjectID()},
 				Namespace: Namespace{
 					Database:   "testdb",
 					Collection: "testcoll",
@@ -257,9 +257,9 @@ func TestMongoDBStreamProvider_processChangeEvent(t *testing.T) {
 			mongoEvent: MongoDBChangeEvent{
 				ID:            bson.M{"_data": "test"},
 				OperationType: "update",
-				ClusterTime:   primitive.Timestamp{T: uint32(time.Now().Unix()), I: 0},
+				ClusterTime:   bson.Timestamp{T: uint32(time.Now().Unix()), I: 0},
 				FullDocument: bson.M{
-					"_id":  primitive.NewObjectID(),
+					"_id":  bson.NewObjectID(),
 					"name": "updated_name",
 				},
 				UpdateDescription: &UpdateDescription{
@@ -268,7 +268,7 @@ func TestMongoDBStreamProvider_processChangeEvent(t *testing.T) {
 					},
 					RemovedFields: []string{"old_field"},
 				},
-				DocumentKey: bson.M{"_id": primitive.NewObjectID()},
+				DocumentKey: bson.M{"_id": bson.NewObjectID()},
 				Namespace: Namespace{
 					Database:   "testdb",
 					Collection: "testcoll",
@@ -284,8 +284,8 @@ func TestMongoDBStreamProvider_processChangeEvent(t *testing.T) {
 			mongoEvent: MongoDBChangeEvent{
 				ID:            bson.M{"_data": "test"},
 				OperationType: "delete",
-				ClusterTime:   primitive.Timestamp{T: uint32(time.Now().Unix()), I: 0},
-				DocumentKey:   bson.M{"_id": primitive.NewObjectID()},
+				ClusterTime:   bson.Timestamp{T: uint32(time.Now().Unix()), I: 0},
+				DocumentKey:   bson.M{"_id": bson.NewObjectID()},
 				Namespace: Namespace{
 					Database:   "testdb",
 					Collection: "testcoll",
@@ -301,7 +301,7 @@ func TestMongoDBStreamProvider_processChangeEvent(t *testing.T) {
 			mongoEvent: MongoDBChangeEvent{
 				ID:            bson.M{"_data": "test"},
 				OperationType: "invalidate",
-				ClusterTime:   primitive.Timestamp{T: uint32(time.Now().Unix()), I: 0},
+				ClusterTime:   bson.Timestamp{T: uint32(time.Now().Unix()), I: 0},
 				Namespace: Namespace{
 					Database:   "testdb",
 					Collection: "testcoll",
@@ -454,12 +454,12 @@ func BenchmarkMongoDBStreamProvider_processChangeEvent(b *testing.B) {
 	mongoEvent := MongoDBChangeEvent{
 		ID:            bson.M{"_data": "test"},
 		OperationType: "insert",
-		ClusterTime:   primitive.Timestamp{T: uint32(time.Now().Unix()), I: 0},
+		ClusterTime:   bson.Timestamp{T: uint32(time.Now().Unix()), I: 0},
 		FullDocument: bson.M{
-			"_id":  primitive.NewObjectID(),
+			"_id":  bson.NewObjectID(),
 			"name": "test",
 		},
-		DocumentKey: bson.M{"_id": primitive.NewObjectID()},
+		DocumentKey: bson.M{"_id": bson.NewObjectID()},
 		Namespace: Namespace{
 			Database:   "testdb",
 			Collection: "testcoll",

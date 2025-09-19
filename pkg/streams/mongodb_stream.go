@@ -400,80 +400,121 @@ func (s *MongoDBStream) processEvents() {
 
 // processChangeEvent processes a single change event
 func (s *MongoDBStream) processChangeEvent(changeEvent bson.M) error {
-// Extract basic event information
-operationType, _ := changeEvent["operationType"].(string)
-collection := s.getCollectionFromEvent(changeEvent)
+	// Extract basic event information
+	operationType, _ := changeEvent["operationType"].(string)
+	collection := s.getCollectionFromEvent(changeEvent)
 
-// Acquire document with recovery mode tracking
-fullDocument, recoveryMode, err := s.acquireDocument(changeEvent)
-if err != nil {
-log.Error().Err(err).
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Str("collection", collection).
-Msg("Failed to acquire document")
-s.mu.Lock()
-s.metrics.ErrorCount++
-s.mu.Unlock()
-return err
-}
+	// Acquire document with recovery mode tracking
+	fullDocument, recoveryMode, err := s.acquireDocument(changeEvent)
+	if err != nil {
+		log.Error().Err(err).
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Msg("Failed to acquire document")
+		s.mu.Lock()
+		s.metrics.ErrorCount++
+		s.mu.Unlock()
+		return err
+	}
 
-// Convert full document to JSON bytes
-var data []byte
-if fullDocument != nil {
-data, err = bson.MarshalExtJSON(fullDocument, true, false)
-if err != nil {
-log.Error().Err(err).
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Str("collection", collection).
-Msg("Failed to marshal document")
-s.mu.Lock()
-s.metrics.ErrorCount++
-s.mu.Unlock()
-return err
-}
-} else if recoveryMode == recoveryModeEmpty {
-// Use pre-allocated empty JSON object
-data = emptyDocJSON
-}
+	// Convert full document to JSON bytes
+	var data []byte
+	if fullDocument != nil {
+	data, err = bson.MarshalExtJSON(fullDocument, true, false)
+	if err != nil {
+		log.Error().Err(err).
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Msg("Failed to marshal document")
+		s.mu.Lock()
+		s.metrics.ErrorCount++
+		s.mu.Unlock()
+		return err
+	}
+	} else if recoveryMode == recoveryModeEmpty {
+	// Use pre-allocated empty JSON object
+	data = emptyDocJSON
+	}
 
-// Record recovery mode metrics if telemetry is available
-if s.telemetry != nil {
-s.telemetry.RecordMongoRecoveryMode(s.ctx, s.config.Name, operationType, recoveryMode)
-}
+	// Record recovery mode metrics if telemetry is available
+	if s.telemetry != nil {
+	s.telemetry.RecordMongoRecoveryMode(s.ctx, s.config.Name, operationType, recoveryMode)
+	}
 
-// Single consolidated log entry for the processed event
-log.Debug().
-	Str("stream", s.config.Name).
-	Str("operation", operationType).
-	Str("collection", collection).
-	Int("data_size", len(data)).
-	Str("recovery_mode", recoveryMode).
-	Msg("mongo change event processed")
+	// Single consolidated log entry for the processed event
+	log.Debug().
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Int("data_size", len(data)).
+		Str("recovery_mode", recoveryMode).
+		Msg("mongo change event processed")
 
-// Create replication event using the existing RecordEvent structure
-recordEvent := events.RecordEvent{
-Action:     operationType,
-Schema:     s.config.Source.Database,
-Collection: collection,
-Data:       data,
-}
+	// Create replication event using the existing RecordEvent structure
+	recordEvent := events.RecordEvent{
+		Action:      operationType,
+		Schema:      s.config.Source.Database,
+		Collection:  collection,
+		DocumentKey: nil, // Ensure DocumentKey is passed correctly
+		Data:        data,
+	}
 
-// Send to event channel (non-blocking)
-select {
-case s.eventChannel <- recordEvent:
-// Event sent successfully - no additional logging needed
-default:
-log.Warn().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Str("collection", collection).
-Msg("Event channel full, dropping event")
-s.mu.Lock()
-s.metrics.ErrorCount++
-s.mu.Unlock()
-}
+	if operationType == "update" || operationType == "delete" || operationType == "insert" {
+	documentKey, err := s.extractDocumentKey(changeEvent)
+	if err != nil {
+		log.Warn().Err(err).
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Msg("Could not extract document key")
+		recordEvent.DocumentKey = emptyDocJSON // Fallback to empty
+	} else if documentKey != nil {
+		documentKeyBytes, err := bson.MarshalExtJSON(documentKey, true, false)
+		if err != nil {
+			log.Error().Err(err).
+			Str("stream", s.config.Name).
+			Str("operation", operationType).
+			Str("collection", collection).
+			Msg("Failed to marshal document key")
+			return err
+		}
+		recordEvent.DocumentKey = documentKeyBytes
+		log.Debug().
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Str("document_key", string(documentKeyBytes)).
+		Msg("Successfully extracted and set DocumentKey")
+	} else {
+		log.Warn().
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Interface("change_event_keys", getMapKeys(changeEvent)).
+		Msg("Document key is nil or missing from change event")
+		recordEvent.DocumentKey = emptyDocJSON // Fallback to empty
+	}
+	}
+	if operationType == "delete" {
+		recordEvent.Data = emptyDocJSON
+	}
+
+	// Send to event channel (non-blocking)
+	select {
+	case s.eventChannel <- recordEvent:
+		// Event sent successfully - no additional logging needed
+	default:
+		log.Warn().
+			Str("stream", s.config.Name).
+			Str("operation", operationType).
+			Str("collection", collection).
+			Msg("Event channel full, dropping event")
+		s.mu.Lock()
+		s.metrics.ErrorCount++
+		s.mu.Unlock()
+	}
 
 return nil
 }
@@ -622,6 +663,69 @@ func (s *MongoDBStream) extractFullDocument(changeEvent bson.M) (bson.M, error) 
 	}
 
 	return nil, fmt.Errorf("fullDocument exists but cannot be converted to bson.M, type: %T", rawFullDoc)
+}
+
+// extractDocumentKey robustly extracts the documentKey from a change event
+func (s *MongoDBStream) extractDocumentKey(changeEvent bson.M) (bson.M, error) {
+	rawDocKey, exists := changeEvent["documentKey"]
+	if !exists {
+	return nil, nil // Key doesn't exist
+	}
+	if rawDocKey == nil {
+	return nil, nil // Key is explicitly nil
+	}
+
+	log.Debug().
+		Str("stream", s.config.Name).
+		Interface("documentKey_type", fmt.Sprintf("%T", rawDocKey)).
+		Msg("Extracting documentKey")
+
+	// Try standard bson.M type assertion
+	if docKey, ok := rawDocKey.(bson.M); ok {
+	return docKey, nil
+	}
+
+	// Try bson.D (ordered document)
+	if docKeyD, ok := rawDocKey.(bson.D); ok {
+	result := make(bson.M)
+	for _, elem := range docKeyD {
+	result[elem.Key] = elem.Value
+	}
+	return result, nil
+	}
+
+	// Try map[string]interface{}
+	if docKeyMap, ok := rawDocKey.(map[string]interface{}); ok {
+	return bson.M(docKeyMap), nil
+	}
+
+	// Try bson.Raw
+	if docKeyRaw, ok := rawDocKey.(bson.Raw); ok {
+	var result bson.M
+	if err := bson.Unmarshal(docKeyRaw, &result); err != nil {
+	return nil, fmt.Errorf("failed to unmarshal bson.Raw documentKey: %w", err)
+	}
+	return result, nil
+	}
+
+	// Fallback: try to marshal and unmarshal
+	if rawBytes, err := bson.Marshal(rawDocKey); err == nil {
+	var result bson.M
+	if err := bson.Unmarshal(rawBytes, &result); err == nil {
+	return result, nil
+	}
+	}
+
+	return nil, fmt.Errorf("documentKey exists but cannot be converted to bson.M, type: %T", rawDocKey)
+}
+
+// getMapKeys returns the keys of a map as a slice for debugging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // fallbackFetchDocument attempts to fetch the full document when fullDocument is missing
