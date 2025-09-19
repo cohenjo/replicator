@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/bson/primitive"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
@@ -287,7 +288,7 @@ func NewMongoTracker(config *MongoConfig) (*MongoTracker, error) {
 	}
 	
 	// Test the connection
-	if err := client.Ping(ctx, nil); err != nil {
+	if err := client.Ping(ctx, options.Ping()); err != nil {
 		client.Disconnect(context.Background())
 		return nil, fmt.Errorf("failed to ping MongoDB: %w", err)
 	}
@@ -395,7 +396,7 @@ func (mt *MongoTracker) saveWithTransaction(ctx context.Context, doc *MongoPosit
 		return nil, nil
 	}
 	
-	_, err = session.WithTransaction(ctx, callback)
+	_, err = mongo.WithSession(ctx, session, callback)
 	if err != nil {
 		return fmt.Errorf("transaction failed: %w", err)
 	}
@@ -450,9 +451,9 @@ func (mt *MongoTracker) Load(ctx context.Context, streamID string) (Position, ma
 	
 	err := mt.collection.FindOne(ctx, filter).Decode(&doc)
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return nil, nil, ErrPositionNotFound
-		}
+	if mongo.IsErrNoDocuments(err) {
+		return nil, nil, ErrPositionNotFound
+	}
 		return nil, nil, fmt.Errorf("failed to find document: %w", err)
 	}
 	

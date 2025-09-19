@@ -208,12 +208,33 @@ func (eb *EstuaryBridge) convertToRecordEvent(event map[string]interface{}) (*ev
 			Msg("No old_data field present")
 	}
 
+	var documentKeyBytes []byte
+	if documentKey, exists := event["documentKey"]; exists && documentKey != nil {
+		switch dk := documentKey.(type) {
+			case []byte:
+				documentKeyBytes = dk
+			case string:
+				documentKeyBytes = []byte(dk)
+			default:
+				documentKeyBytes, err = json.Marshal(dk)
+			if err != nil {
+				log.Error().
+					Err(err).
+					Str("action", action).
+					Interface("documentKey", dk).
+					Msg("Failed to marshal documentKey")
+				return nil, fmt.Errorf("failed to marshal documentKey: %w", err)
+			}
+		}
+	}
+
 	return &events.RecordEvent{
 		Action:     action,
 		Schema:     schema,
 		Collection: collection,
 		Data:       dataBytes,
 		OldData:    oldDataBytes,
+		DocumentKey: documentKeyBytes,
 	}, nil
 }
 

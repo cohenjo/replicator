@@ -454,16 +454,15 @@ log.Debug().
 
 	// Create replication event using the existing RecordEvent structure
 	recordEvent := events.RecordEvent{
-		Action:     operationType,
-		Schema:     s.config.Source.Database,
-		Collection: collection,
-		Data:       data,
+		Action:      operationType,
+		Schema:      s.config.Source.Database,
+		Collection:  collection,
+		DocumentKey: nil, // Placeholder for DocumentKey
+		Data:        data,
 	}
 
-	// For update and delete operations, include the document key in OldData
 	if operationType == "update" || operationType == "delete" {
 		if documentKey, ok := changeEvent["documentKey"].(bson.M); ok && documentKey != nil {
-			// Convert document key to JSON for OldData
 			oldDataBytes, err := bson.MarshalExtJSON(documentKey, true, false)
 			if err != nil {
 				log.Error().Err(err).
@@ -473,9 +472,7 @@ log.Debug().
 					Msg("Failed to marshal document key")
 				return err
 			}
-			recordEvent.OldData = oldDataBytes
-			
-			// Debug logging to trace OldData
+			recordEvent.DocumentKey = oldDataBytes
 			log.Debug().
 				Str("stream", s.config.Name).
 				Str("operation", operationType).
@@ -492,6 +489,9 @@ log.Debug().
 				Interface("change_event_keys", getMapKeys(changeEvent)).
 				Msg("Missing document key for update/delete operation")
 		}
+	}
+	if operationType == "delete" {
+		recordEvent.Data = emptyDocJSON
 	}
 
 	// Send to event channel (non-blocking)
