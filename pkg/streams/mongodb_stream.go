@@ -461,42 +461,42 @@ func (s *MongoDBStream) processChangeEvent(changeEvent bson.M) error {
 		Data:        data,
 	}
 
-if operationType == "update" || operationType == "delete" || operationType == "insert" {
-documentKey, err := s.extractDocumentKey(changeEvent)
-if err != nil {
-log.Warn().Err(err).
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Str("collection", collection).
-Msg("Could not extract document key")
-recordEvent.DocumentKey = emptyDocJSON // Fallback to empty
-} else if documentKey != nil {
-documentKeyBytes, err := bson.MarshalExtJSON(documentKey, true, false)
-if err != nil {
-log.Error().Err(err).
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Str("collection", collection).
-Msg("Failed to marshal document key")
-return err
-}
-recordEvent.DocumentKey = documentKeyBytes
-log.Debug().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Str("collection", collection).
-Str("document_key", string(documentKeyBytes)).
-Msg("Successfully extracted and set DocumentKey")
-} else {
-log.Warn().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Str("collection", collection).
-Interface("change_event_keys", getMapKeys(changeEvent)).
-Msg("Document key is nil or missing from change event")
-recordEvent.DocumentKey = emptyDocJSON // Fallback to empty
-}
-}
+	if operationType == "update" || operationType == "delete" || operationType == "insert" {
+	documentKey, err := s.extractDocumentKey(changeEvent)
+	if err != nil {
+		log.Warn().Err(err).
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Msg("Could not extract document key")
+		recordEvent.DocumentKey = emptyDocJSON // Fallback to empty
+	} else if documentKey != nil {
+		documentKeyBytes, err := bson.MarshalExtJSON(documentKey, true, false)
+		if err != nil {
+			log.Error().Err(err).
+			Str("stream", s.config.Name).
+			Str("operation", operationType).
+			Str("collection", collection).
+			Msg("Failed to marshal document key")
+			return err
+		}
+		recordEvent.DocumentKey = documentKeyBytes
+		log.Debug().
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Str("document_key", string(documentKeyBytes)).
+		Msg("Successfully extracted and set DocumentKey")
+	} else {
+		log.Warn().
+		Str("stream", s.config.Name).
+		Str("operation", operationType).
+		Str("collection", collection).
+		Interface("change_event_keys", getMapKeys(changeEvent)).
+		Msg("Document key is nil or missing from change event")
+		recordEvent.DocumentKey = emptyDocJSON // Fallback to empty
+	}
+	}
 	if operationType == "delete" {
 		recordEvent.Data = emptyDocJSON
 	}
@@ -667,51 +667,56 @@ func (s *MongoDBStream) extractFullDocument(changeEvent bson.M) (bson.M, error) 
 
 // extractDocumentKey robustly extracts the documentKey from a change event
 func (s *MongoDBStream) extractDocumentKey(changeEvent bson.M) (bson.M, error) {
-rawDocKey, exists := changeEvent["documentKey"]
-if !exists {
-return nil, nil // Key doesn't exist
-}
-if rawDocKey == nil {
-return nil, nil // Key is explicitly nil
-}
+	rawDocKey, exists := changeEvent["documentKey"]
+	if !exists {
+	return nil, nil // Key doesn't exist
+	}
+	if rawDocKey == nil {
+	return nil, nil // Key is explicitly nil
+	}
 
-// Try standard bson.M type assertion
-if docKey, ok := rawDocKey.(bson.M); ok {
-return docKey, nil
-}
+	log.Debug().
+		Str("stream", s.config.Name).
+		Interface("documentKey_type", fmt.Sprintf("%T", rawDocKey)).
+		Msg("Extracting documentKey")
 
-// Try bson.D (ordered document)
-if docKeyD, ok := rawDocKey.(bson.D); ok {
-result := make(bson.M)
-for _, elem := range docKeyD {
-result[elem.Key] = elem.Value
-}
-return result, nil
-}
+	// Try standard bson.M type assertion
+	if docKey, ok := rawDocKey.(bson.M); ok {
+	return docKey, nil
+	}
 
-// Try map[string]interface{}
-if docKeyMap, ok := rawDocKey.(map[string]interface{}); ok {
-return bson.M(docKeyMap), nil
-}
+	// Try bson.D (ordered document)
+	if docKeyD, ok := rawDocKey.(bson.D); ok {
+	result := make(bson.M)
+	for _, elem := range docKeyD {
+	result[elem.Key] = elem.Value
+	}
+	return result, nil
+	}
 
-// Try bson.Raw
-if docKeyRaw, ok := rawDocKey.(bson.Raw); ok {
-var result bson.M
-if err := bson.Unmarshal(docKeyRaw, &result); err != nil {
-return nil, fmt.Errorf("failed to unmarshal bson.Raw documentKey: %w", err)
-}
-return result, nil
-}
+	// Try map[string]interface{}
+	if docKeyMap, ok := rawDocKey.(map[string]interface{}); ok {
+	return bson.M(docKeyMap), nil
+	}
 
-// Fallback: try to marshal and unmarshal
-if rawBytes, err := bson.Marshal(rawDocKey); err == nil {
-var result bson.M
-if err := bson.Unmarshal(rawBytes, &result); err == nil {
-return result, nil
-}
-}
+	// Try bson.Raw
+	if docKeyRaw, ok := rawDocKey.(bson.Raw); ok {
+	var result bson.M
+	if err := bson.Unmarshal(docKeyRaw, &result); err != nil {
+	return nil, fmt.Errorf("failed to unmarshal bson.Raw documentKey: %w", err)
+	}
+	return result, nil
+	}
 
-return nil, fmt.Errorf("documentKey exists but cannot be converted to bson.M, type: %T", rawDocKey)
+	// Fallback: try to marshal and unmarshal
+	if rawBytes, err := bson.Marshal(rawDocKey); err == nil {
+	var result bson.M
+	if err := bson.Unmarshal(rawBytes, &result); err == nil {
+	return result, nil
+	}
+	}
+
+	return nil, fmt.Errorf("documentKey exists but cannot be converted to bson.M, type: %T", rawDocKey)
 }
 
 // getMapKeys returns the keys of a map as a slice for debugging
