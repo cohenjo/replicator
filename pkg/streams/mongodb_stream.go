@@ -452,28 +452,62 @@ log.Debug().
 	Str("recovery_mode", recoveryMode).
 	Msg("mongo change event processed")
 
-// Create replication event using the existing RecordEvent structure
-recordEvent := events.RecordEvent{
-Action:     operationType,
-Schema:     s.config.Source.Database,
-Collection: collection,
-Data:       data,
-}
+	// Create replication event using the existing RecordEvent structure
+	recordEvent := events.RecordEvent{
+		Action:     operationType,
+		Schema:     s.config.Source.Database,
+		Collection: collection,
+		Data:       data,
+	}
 
-// Send to event channel (non-blocking)
-select {
-case s.eventChannel <- recordEvent:
-// Event sent successfully - no additional logging needed
-default:
-log.Warn().
-Str("stream", s.config.Name).
-Str("operation", operationType).
-Str("collection", collection).
-Msg("Event channel full, dropping event")
-s.mu.Lock()
-s.metrics.ErrorCount++
-s.mu.Unlock()
-}
+	// For update and delete operations, include the document key in OldData
+	if operationType == "update" || operationType == "delete" {
+		if documentKey, ok := changeEvent["documentKey"].(bson.M); ok && documentKey != nil {
+			// Convert document key to JSON for OldData
+			oldDataBytes, err := bson.MarshalExtJSON(documentKey, true, false)
+			if err != nil {
+				log.Error().Err(err).
+					Str("stream", s.config.Name).
+					Str("operation", operationType).
+					Str("collection", collection).
+					Msg("Failed to marshal document key")
+				return err
+			}
+			recordEvent.OldData = oldDataBytes
+			
+			// Debug logging to trace OldData
+			log.Debug().
+				Str("stream", s.config.Name).
+				Str("operation", operationType).
+				Str("collection", collection).
+				Int("old_data_len", len(oldDataBytes)).
+				Str("old_data", string(oldDataBytes)).
+				Interface("document_key", documentKey).
+				Msg("Set OldData from document key")
+		} else {
+			log.Warn().
+				Str("stream", s.config.Name).
+				Str("operation", operationType).
+				Str("collection", collection).
+				Interface("change_event_keys", getMapKeys(changeEvent)).
+				Msg("Missing document key for update/delete operation")
+		}
+	}
+
+	// Send to event channel (non-blocking)
+	select {
+	case s.eventChannel <- recordEvent:
+		// Event sent successfully - no additional logging needed
+	default:
+		log.Warn().
+			Str("stream", s.config.Name).
+			Str("operation", operationType).
+			Str("collection", collection).
+			Msg("Event channel full, dropping event")
+		s.mu.Lock()
+		s.metrics.ErrorCount++
+		s.mu.Unlock()
+	}
 
 return nil
 }
@@ -622,6 +656,15 @@ func (s *MongoDBStream) extractFullDocument(changeEvent bson.M) (bson.M, error) 
 	}
 
 	return nil, fmt.Errorf("fullDocument exists but cannot be converted to bson.M, type: %T", rawFullDoc)
+}
+
+// getMapKeys returns the keys of a map as a slice for debugging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // fallbackFetchDocument attempts to fetch the full document when fullDocument is missing

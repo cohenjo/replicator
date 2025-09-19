@@ -4,7 +4,7 @@ Auto-generated from all feature plans. Last updated: 2025-09-17
 
 ## Active Technologies
 - Go 1.25+ + MongoDB, Azure Entra ID (001-replicator-is-a)
-- go.mongodb.org/mongo-driver + github.com/Azure/azure-sdk-for-go/sdk/azidentity (002-mongo-vcore-entra)
+- go.mongodb.org/mongo-driver/v2 + github.com/Azure/azure-sdk-for-go/sdk/azidentity (002-mongo-vcore-entra)
 - MONGODB-OIDC mechanism + Azure workload identity (002-mongo-vcore-entra)
 
 ## Project Structure

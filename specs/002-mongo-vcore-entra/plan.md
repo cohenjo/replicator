@@ -33,7 +33,7 @@ Add Azure Entra (workload identity) authentication support for MongoDB connectio
 
 ## Technical Context
 **Language/Version**: Go 1.25+  
-**Primary Dependencies**: go.mongodb.org/mongo-driver, github.com/Azure/azure-sdk-for-go/sdk/azidentity, existing pkg/auth package  
+**Primary Dependencies**: go.mongodb.org/mongo-driver/v2, github.com/Azure/azure-sdk-for-go/sdk/azidentity, existing pkg/auth package  
 **Storage**: MongoDB Cosmos DB for MongoDB vCore (existing)  
 **Testing**: Go testing with testcontainers for MongoDB integration tests  
 **Target Platform**: Kubernetes (existing deployment)
@@ -47,7 +47,7 @@ Add Azure Entra (workload identity) authentication support for MongoDB connectio
 
 **Simplicity**:
 - Projects: 1 (extending existing replicator project)
-- Using framework directly? (go.mongodb.org/mongo-driver with OIDC, Azure SDK directly)
+- Using framework directly? (go.mongodb.org/mongo-driver/v2 with OIDC, Azure SDK directly)
 - Single data model? (extending existing MongoConfig, no new DTOs)
 - Avoiding patterns? (direct authentication integration, no additional wrapper patterns)
 

@@ -265,15 +265,19 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 			logger.Error().Msg("Delete operation requires OldData with document key")
 			return
 		}
-		
-		var key events.RecordKey
-		err = ffjson.Unmarshal(record.OldData, &key)
+
+		// Parse the document key directly as it contains _id
+		var documentKey map[string]interface{}
+		err = ffjson.Unmarshal(record.OldData, &documentKey)
 		if err != nil {
-			logger.Error().Err(err).Msgf("Error while Unmarshal key for delete")
+			logger.Error().Err(err).Msgf("Error while Unmarshal document key for delete")
 			return
 		}
 
-		filter, err := bson.Marshal(key)
+		// Convert Extended JSON format if needed
+		documentKey = convertExtendedJSON(documentKey)
+
+		filter, err := bson.Marshal(documentKey)
 		if err != nil {
 			logger.Error().Err(err).Msgf("Error while Marshal filter")
 			return
@@ -286,21 +290,26 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 		}
 		logger.Debug().Int("DeletedCount", int(deleteResult.DeletedCount)).Msg("record deleted properly")
 		
+
 	case "update":
 		// For updates, we need the key from OldData to identify the document
 		if len(record.OldData) == 0 {
 			logger.Error().Msg("Update operation requires OldData with document key")
 			return
 		}
-		
-		var key events.RecordKey
-		err = ffjson.Unmarshal(record.OldData, &key)
+
+		// Parse the document key directly as it contains _id
+		var documentKey map[string]interface{}
+		err = ffjson.Unmarshal(record.OldData, &documentKey)
 		if err != nil {
-			logger.Error().Err(err).Msgf("Error while Unmarshal key for update")
+			logger.Error().Err(err).Msgf("Error while Unmarshal document key for update")
 			return
 		}
 
-		filter, err := bson.Marshal(key)
+		// Convert Extended JSON format if needed
+		documentKey = convertExtendedJSON(documentKey)
+
+		filter, err := bson.Marshal(documentKey)
 		if err != nil {
 			logger.Error().Err(err).Msgf("Error while Marshal filter")
 			return

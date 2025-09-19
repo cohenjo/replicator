@@ -105,22 +105,40 @@ func NewEstuaryBridge(targetConfig config.TargetConfig) (*EstuaryBridge, error) 
 
 // WriteEvent implements the EstuaryWriter interface
 func (eb *EstuaryBridge) WriteEvent(ctx context.Context, event map[string]interface{}) error {
-log.Debug().Str("name", eb.name).Interface("event", event).Msg("EstuaryBridge.WriteEvent called")
+	// Enhanced debug logging for old_data tracking
+	hasOldData := event["old_data"] != nil
+	action := ""
+	if a, ok := event["action"].(string); ok {
+		action = a
+	}
+	
+	log.Debug().
+		Str("name", eb.name).
+		Str("action", action).
+		Bool("has_old_data", hasOldData).
+		Interface("event", event).
+		Msg("EstuaryBridge.WriteEvent called")
 
-// Convert the transformed event data back to RecordEvent format for legacy endpoint
-recordEvent, err := eb.convertToRecordEvent(event)
-if err != nil {
-log.Error().Err(err).Str("name", eb.name).Msg("EstuaryBridge.WriteEvent failed to convert event")
-return fmt.Errorf("failed to convert event: %w", err)
-}
+	// Convert the transformed event data back to RecordEvent format for legacy endpoint
+	recordEvent, err := eb.convertToRecordEvent(event)
+	if err != nil {
+		log.Error().Err(err).Str("name", eb.name).Msg("EstuaryBridge.WriteEvent failed to convert event")
+		return fmt.Errorf("failed to convert event: %w", err)
+	}
 
-log.Debug().Str("name", eb.name).Interface("recordEvent", recordEvent).Msg("EstuaryBridge calling endpoint.WriteEvent")
+	log.Debug().
+		Str("name", eb.name).
+		Str("action", recordEvent.Action).
+		Bool("has_old_data", recordEvent.OldData != nil).
+		Int("old_data_len", len(recordEvent.OldData)).
+		Interface("recordEvent", recordEvent).
+		Msg("EstuaryBridge calling endpoint.WriteEvent")
 
-// Call the legacy endpoint's WriteEvent method
-eb.endpoint.WriteEvent(recordEvent)
+	// Call the legacy endpoint's WriteEvent method
+	eb.endpoint.WriteEvent(recordEvent)
 
-log.Debug().Str("name", eb.name).Msg("EstuaryBridge.WriteEvent completed")
-return nil
+	log.Debug().Str("name", eb.name).Msg("EstuaryBridge.WriteEvent completed")
+	return nil
 }
 
 // Close implements the EstuaryWriter interface
@@ -138,11 +156,11 @@ func (eb *EstuaryBridge) convertToRecordEvent(event map[string]interface{}) (*ev
 	action, _ := event["action"].(string)
 	schema, _ := event["schema"].(string)
 	collection, _ := event["collection"].(string)
-	
+
 	// Handle data field - could be raw JSON bytes or a map
 	var dataBytes []byte
 	var err error
-	
+
 	if data, exists := event["data"]; exists {
 		switch d := data.(type) {
 		case []byte:
@@ -161,6 +179,12 @@ func (eb *EstuaryBridge) convertToRecordEvent(event map[string]interface{}) (*ev
 	// Handle old_data field
 	var oldDataBytes []byte
 	if oldData, exists := event["old_data"]; exists && oldData != nil {
+		log.Debug().
+			Str("action", action).
+			Interface("old_data_type", fmt.Sprintf("%T", oldData)).
+			Bool("old_data_exists", true).
+			Msg("Processing old_data field")
+			
 		switch od := oldData.(type) {
 		case []byte:
 			oldDataBytes = od
@@ -169,9 +193,19 @@ func (eb *EstuaryBridge) convertToRecordEvent(event map[string]interface{}) (*ev
 		default:
 			oldDataBytes, err = json.Marshal(od)
 			if err != nil {
+				log.Error().
+					Err(err).
+					Str("action", action).
+					Interface("old_data", od).
+					Msg("Failed to marshal old_data")
 				return nil, fmt.Errorf("failed to marshal old_data: %w", err)
 			}
 		}
+	} else {
+		log.Debug().
+			Str("action", action).
+			Bool("old_data_exists", false).
+			Msg("No old_data field present")
 	}
 
 	return &events.RecordEvent{
