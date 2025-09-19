@@ -429,6 +429,10 @@ s.logger.WithFields(logrus.Fields{
 "collection": event.Collection,
 "data_size":  len(event.Data),
 }).Warn("Skipping event with empty Data field for actionable operation")
+if event.DocumentKey == nil {
+log.Warn("Missing document key for update/delete operation")
+return nil
+}
 
 // Update metrics for skipped events
 if s.metricsCollector != nil {

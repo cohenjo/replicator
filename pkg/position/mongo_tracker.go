@@ -241,30 +241,34 @@ SetRetryReads(config.RetryReads)
 	
 	// Set write concern
 	if config.WriteConcern != nil {
-		wcOpts := []writeconcern.Option{}
+		wcOpts := make([]writeconcern.Option, 0)
 		
 		// Set W (write concern)
 		switch w := config.WriteConcern.W.(type) {
-		case int:
-			wcOpts = append(wcOpts, writeconcern.W(1))
-		case string:
-			if w == "majority" {
-				wcOpts = append(wcOpts, writeconcern.WMajority())
-			} else {
-							}
+case int:
+wcOpts = append(wcOpts, writeconcern.W(w))
+case string:
+if w == "majority" {
+wcOpts = append(wcOpts, writeconcern.WMajority())
+} else {
+wcOpts = append(wcOpts, writeconcern.WTagSet(w))
+}
 		default:
 			wcOpts = append(wcOpts, writeconcern.WMajority())
 		}
 		
 		// Set journal requirement
-		if config.WriteConcern.J {
-					}
+if config.WriteConcern.J {
+wcOpts = append(wcOpts, writeconcern.J(true))
+}
 		
 		// Set timeout
-		if config.WriteConcern.WTimeout > 0 {
-					}
+if config.WriteConcern.WTimeout > 0 {
+wcOpts = append(wcOpts, writeconcern.WTimeout(config.WriteConcern.WTimeout))
+}
 		
-		wc := writeconcern.New()
+		wc := writeconcern.New(wcOpts...)
+clientOpts.SetWriteConcern(wc)
 			}
 	
 	// Set compressors
@@ -445,7 +449,7 @@ func (mt *MongoTracker) Load(ctx context.Context, streamID string) (Position, ma
 	
 	err := mt.collection.FindOne(ctx, filter).Decode(&doc)
 	if err != nil {
-	if mongo.IsErrNoDocuments(err) {
+	if err == mongo.ErrNoDocuments {
 		return nil, nil, ErrPositionNotFound
 	}
 		return nil, nil, fmt.Errorf("failed to find document: %w", err)
