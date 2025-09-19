@@ -315,39 +315,39 @@ func (std MongoEndpoint) WriteEvent(record *events.RecordEvent) {
 			return
 		}
 
-// For updates, we need to ensure the _id from the document key matches the _id in the full document.
-// Then, we remove _id from the update payload to avoid the immutable field error.
+		// For updates, we need to ensure the _id from the document key matches the _id in the full document.
+		// Then, we remove _id from the update payload to avoid the immutable field error.
 
-// 1. Extract _id from the document key filter
-var keyFilterMap map[string]interface{}
-if err := bson.Unmarshal(filter, &keyFilterMap); err != nil {
-logger.Error().Err(err).Msg("Failed to unmarshal document key filter for verification")
-return
-}
-keyID, keyOk := keyFilterMap["_id"]
+		// 1. Extract _id from the document key filter
+		var keyFilterMap map[string]interface{}
+		if err := bson.Unmarshal(filter, &keyFilterMap); err != nil {
+		logger.Error().Err(err).Msg("Failed to unmarshal document key filter for verification")
+		return
+		}
+		keyID, keyOk := keyFilterMap["_id"]
 
-// 2. Extract _id from the full document payload
-docID, docOk := row["_id"]
+		// 2. Extract _id from the full document payload
+		docID, docOk := row["_id"]
 
-// 3. Verify that the _id fields match
-if !keyOk || !docOk || keyID != docID {
-logger.Error().
-Interface("key_id", keyID).
-Interface("doc_id", docID).
-Msg("Mismatch between document key _id and payload _id. Halting update.")
-return
-}
+		// 3. Verify that the _id fields match
+		if !keyOk || !docOk || keyID != docID {
+		logger.Error().
+		Interface("key_id", keyID).
+		Interface("doc_id", docID).
+		Msg("Mismatch between document key _id and payload _id. Halting update.")
+		return
+		}
 
-// 4. If they match, remove the _id from the payload to prevent immutable field error
-delete(row, "_id")
+		// 4. If they match, remove the _id from the payload to prevent immutable field error
+		delete(row, "_id")
 
-// 5. Construct the update operation
-update := bson.M{
-"$set": row,
-}
+		// 5. Construct the update operation
+		update := bson.M{
+		"$set": row,
+		}
 
-// 6. Execute the update
-updateResult, err := std.collection.UpdateOne(context.TODO(), filter, update)
+		// 6. Execute the update
+		updateResult, err := std.collection.UpdateOne(context.TODO(), filter, update)
 		if err != nil {
 			logger.Error().Err(err).Msgf("Failed to update record")
 			return

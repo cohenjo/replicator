@@ -414,120 +414,120 @@ func (s *Service) createEstuaryWriter(targetConfig config.TargetConfig) (Estuary
 							
 // handleEvent processes a single event
 func (s *Service) handleEvent(ctx context.Context, event events.RecordEvent) error {
-s.logger.WithFields(logrus.Fields{
-"action":     event.Action,
-"schema":     event.Schema,
-"collection": event.Collection,
-}).Debug("Processing event")
+	s.logger.WithFields(logrus.Fields{
+	"action":     event.Action,
+	"schema":     event.Schema,
+	"collection": event.Collection,
+	}).Debug("Processing event")
 
-// Guard against empty data for actionable operations
-isActionableOp := event.Action == "insert" || event.Action == "update" || event.Action == "replace"
-if len(event.Data) == 0 && isActionableOp {
-s.logger.WithFields(logrus.Fields{
-"action":     event.Action,
-"schema":     event.Schema,
-"collection": event.Collection,
-"data_size":  len(event.Data),
-}).Warn("Skipping event with empty Data field for actionable operation")
-if event.DocumentKey == nil {
-log.Warn("Missing document key for update/delete operation")
-return nil
-}
+	// Guard against empty data for actionable operations
+	isActionableOp := event.Action == "insert" || event.Action == "update" || event.Action == "replace"
+	if len(event.Data) == 0 && isActionableOp {
+		s.logger.WithFields(logrus.Fields{
+			"action":     event.Action,
+			"schema":     event.Schema,
+			"collection": event.Collection,
+			"data_size":  len(event.Data),
+		}).Warn("Skipping event with empty Data field for actionable operation")
+		if event.DocumentKey == nil {
+			s.logger.Warn("Missing document key for update/delete operation")
+		return nil
+		}
 
-// Update metrics for skipped events
-if s.metricsCollector != nil {
-s.metricsCollector.IncrementCounter("events_data_missing_total", 1)
-}
-return nil
-}
+		// Update metrics for skipped events
+		if s.metricsCollector != nil {
+		s.metricsCollector.IncrementCounter("events_data_missing_total", 1)
+		}
+		return nil
+	}
 
-// Convert event to map for transformation
-eventData := map[string]interface{}{
-    "action":       event.Action,
-    "schema":       event.Schema,
-    "collection":   event.Collection,
-    "table":        event.Collection, // Use collection as table
-    "data":         event.Data,
-    "old_data":     event.OldData,
-    "documentKey":  event.DocumentKey, // Ensure documentKey is preserved
-    "position":     "", // Not available in this event type
-    "timestamp":    time.Now(), // Use current time
-    "source":       event.Schema, // Use schema as source
-    "_metadata": map[string]interface{}{
-        "event_id":    fmt.Sprintf("%s_%s_%d", event.Schema, event.Collection, time.Now().UnixNano()),
-        "source_type": event.Schema,
-        "processed_at": time.Now(),
-    },
-}
+	// Convert event to map for transformation
+	eventData := map[string]interface{}{
+		"action":       event.Action,
+		"schema":       event.Schema,
+		"collection":   event.Collection,
+		"table":        event.Collection, // Use collection as table
+		"data":         event.Data,
+		"old_data":     event.OldData,
+		"documentKey":  event.DocumentKey, // Ensure documentKey is preserved
+		"position":     "", // Not available in this event type
+		"timestamp":    time.Now(), // Use current time
+		"source":       event.Schema, // Use schema as source
+		"_metadata": map[string]interface{}{
+			"event_id":    fmt.Sprintf("%s_%s_%d", event.Schema, event.Collection, time.Now().UnixNano()),
+			"source_type": event.Schema,
+			"processed_at": time.Now(),
+		},
+	}
 
-// Apply transformations if configured
-var transformedData map[string]interface{}
-var transformationErr error
+	// Apply transformations if configured
+	var transformedData map[string]interface{}
+	var transformationErr error
 
-if s.transformEngine != nil {
-// Apply stream-specific transformations
-// Note: In a real implementation, you'd get the stream config and rules
-// For now, we'll apply any global transformations
-transformResult, err := s.transformEngine.Transform(ctx, eventData)
-if err != nil {
-transformationErr = fmt.Errorf("transformation failed: %w", err)
-s.logger.WithError(err).Error("Failed to transform event")
+	if s.transformEngine != nil {
+	// Apply stream-specific transformations
+	// Note: In a real implementation, you'd get the stream config and rules
+	// For now, we'll apply any global transformations
+	transformResult, err := s.transformEngine.Transform(ctx, eventData)
+	if err != nil {
+	transformationErr = fmt.Errorf("transformation failed: %w", err)
+	s.logger.WithError(err).Error("Failed to transform event")
 
-// Use original data if transformation fails
-transformedData = eventData
-} else if transformResult.Success {
-transformedData = transformResult.Output
-s.logger.WithFields(logrus.Fields{
-"applied_rules": transformResult.AppliedRules,
-"execution_time": transformResult.ExecutionTime,
-}).Debug("Event transformed successfully")
-} else {
-// Transformation had errors but may have partial results
-transformedData = transformResult.Output
-s.logger.WithFields(logrus.Fields{
-"errors": transformResult.Errors,
-"warnings": transformResult.Warnings,
-}).Warn("Event transformation completed with errors")
-}
-
-// Preserve critical fields that should not be lost during transformation
-// This ensures update/delete operations have the necessary document key
-if eventData["old_data"] != nil && transformedData != nil {
-transformedData["old_data"] = eventData["old_data"]
-s.logger.WithFields(logrus.Fields{
-"action": event.Action,
-"has_old_data": true,
-}).Debug("Preserved old_data field after transformation")
-}
-} else {
-// No transformation engine, use original data
-transformedData = eventData
-}
-
-// Route to appropriate destinations (estuaries)
-// Note: This would typically route based on stream configuration
-log.Debug().Int("estuary_count", len(s.estuaries)).Msg("Service.handleEvent: routing to estuaries")
-for i, estuary := range s.estuaries {
-log.Debug().Int("estuary_index", i).Str("estuary", fmt.Sprintf("%T", estuary)).Msg("Service.handleEvent: writing to estuary")
-if err := estuary.WriteEvent(ctx, transformedData); err != nil {
-	s.logger.WithError(err).Error("Failed to write event to estuary")
-	log.Error().Err(err).Int("estuary_index", i).Msg("Service.handleEvent: failed to write to estuary")
-	// Continue with other estuaries even if one fails
+	// Use original data if transformation fails
+	transformedData = eventData
+	} else if transformResult.Success {
+		transformedData = transformResult.Output
+		s.logger.WithFields(logrus.Fields{
+		"applied_rules": transformResult.AppliedRules,
+		"execution_time": transformResult.ExecutionTime,
+		}).Debug("Event transformed successfully")
 	} else {
-		log.Debug().Int("estuary_index", i).Msg("Service.handleEvent: successfully wrote to estuary")
+	// Transformation had errors but may have partial results
+	transformedData = transformResult.Output
+	s.logger.WithFields(logrus.Fields{
+	"errors": transformResult.Errors,
+	"warnings": transformResult.Warnings,
+	}).Warn("Event transformation completed with errors")
 	}
-}
 
-// Update metrics
-if s.metricsCollector != nil {
-	metrics := map[string]interface{}{
-		"events_processed": 1,
-		"event_action": event.Action,
-		"source_type": event.Schema,
+	// Preserve critical fields that should not be lost during transformation
+	// This ensures update/delete operations have the necessary document key
+	if eventData["old_data"] != nil && transformedData != nil {
+	transformedData["old_data"] = eventData["old_data"]
+	s.logger.WithFields(logrus.Fields{
+	"action": event.Action,
+	"has_old_data": true,
+	}).Debug("Preserved old_data field after transformation")
 	}
+	} else {
+	// No transformation engine, use original data
+	transformedData = eventData
+	}
+
+	// Route to appropriate destinations (estuaries)
+	// Note: This would typically route based on stream configuration
+	log.Debug().Int("estuary_count", len(s.estuaries)).Msg("Service.handleEvent: routing to estuaries")
+	for i, estuary := range s.estuaries {
+	log.Debug().Int("estuary_index", i).Str("estuary", fmt.Sprintf("%T", estuary)).Msg("Service.handleEvent: writing to estuary")
+	if err := estuary.WriteEvent(ctx, transformedData); err != nil {
+		s.logger.WithError(err).Error("Failed to write event to estuary")
+		log.Error().Err(err).Int("estuary_index", i).Msg("Service.handleEvent: failed to write to estuary")
+		// Continue with other estuaries even if one fails
+		} else {
+			log.Debug().Int("estuary_index", i).Msg("Service.handleEvent: successfully wrote to estuary")
+		}
+	}
+
+	// Update metrics
+	if s.metricsCollector != nil {
+		metrics := map[string]interface{}{
+			"events_processed": 1,
+			"event_action": event.Action,
+			"source_type": event.Schema,
+		}
 	
-	if transformationErr != nil {
-		metrics["transformation_errors"] = 1
+		if transformationErr != nil {
+			metrics["transformation_errors"] = 1
 		} else {
 			metrics["transformation_success"] = 1
 		}
